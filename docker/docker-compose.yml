@@ -1,10 +1,10 @@
 services:
-  dark-gene-pipeline:
+  carrier-screening:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: dark-gene-pipeline:latest
-    container_name: dark-gene-pipeline
+    image: carrier-screening:latest
+    container_name: carrier-screening
     ports:
       - "5000:5000"  # Dashboard (using 5001 to avoid conflict)
       - "8080:8080"  # Daemon API (using 8081 to avoid conflict)

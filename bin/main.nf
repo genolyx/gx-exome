@@ -280,7 +280,6 @@ workflow.onComplete {
             def summaryOut = file("${params.output_dir}/summary")
             def snapshotsOut = file("${params.output_dir}/snapshots")
             def vcfOut = file("${params.output_dir}/vcf")
-            def bamOut = file("${params.output_dir}/bam")
             def cnvOut = file("${params.output_dir}/cnv")
             def svOut = file("${params.output_dir}/sv")
             def repeatOut = file("${params.output_dir}/repeat")
@@ -289,7 +288,6 @@ workflow.onComplete {
             summaryOut.mkdirs()
             snapshotsOut.mkdirs()
             vcfOut.mkdirs()
-            bamOut.mkdirs()
             cnvOut.mkdirs()
             svOut.mkdirs()
             repeatOut.mkdirs()
@@ -313,11 +311,6 @@ workflow.onComplete {
             # VCF files (filtered only)
             if [ -d "${params.outdir}/variant" ]; then
                 cp ${params.outdir}/variant/*_filtered.vcf.gz* ${vcfOut}/ 2>/dev/null || true
-            fi
-            
-            # BAM files (marked duplicates only)
-            if [ -d "${params.outdir}/alignment" ]; then
-                cp ${params.outdir}/alignment/*.md.bam* ${bamOut}/ 2>/dev/null || true
             fi
             
             # CNV segments

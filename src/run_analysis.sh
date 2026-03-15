@@ -23,6 +23,7 @@ Options:
     -d, --data-dir DIR         Data directory path (default: ./data)
     -r, --ref-dir DIR          Reference directory path (default: ./refs)
     -c, --cleanup              Clean up work directory after completion
+    --skip-cnv                 Skip CNV analysis (single sample 시 필요, cohort mode는 2+ 샘플 필요)
     -h, --help                 Show this help message
 
 Example:
@@ -46,6 +47,7 @@ SAMPLE_NAME=""
 DATA_DIR="$(pwd)/data"
 REF_DIR="$(pwd)/refs"
 CLEANUP=""
+SKIP_CNV=""
 
 # 파라미터 파싱
 while [[ $# -gt 0 ]]; do
@@ -70,6 +72,10 @@ while [[ $# -gt 0 ]]; do
             CLEANUP="--cleanup"
             shift
             ;;
+        --skip-cnv)
+            SKIP_CNV="--skip_cnv"
+            shift
+            ;;
         -h|--help)
             usage
             ;;
@@ -92,22 +98,27 @@ REF_DIR=$(realpath "$REF_DIR")
 
 # 디렉토리 존재 확인
 FASTQ_DIR="${DATA_DIR}/fastq/${WORK_DIR}/${SAMPLE_NAME}"
+if [ ! -d "${DATA_DIR}/data/refs" ] || [ ! -d "${DATA_DIR}/data/bed" ]; then
+    echo -e "${RED}Error: data/refs and data/bed required. Use -d <project_root> (e.g. -d .)${NC}"
+    exit 1
+fi
 if [ ! -d "$FASTQ_DIR" ]; then
     echo -e "${RED}Error: FASTQ directory not found: ${FASTQ_DIR}${NC}"
     exit 1
 fi
 
-# R1/R2 파일 확인
-R1_COUNT=$(find "$FASTQ_DIR" -name "*_R1_*.fastq.gz" -o -name "*_R1_*.fq.gz" | wc -l)
-R2_COUNT=$(find "$FASTQ_DIR" -name "*_R2_*.fastq.gz" -o -name "*_R2_*.fq.gz" | wc -l)
+# R1/R2 파일 확인 (*_R1_*, *_R1.*, *_1.*, *_R2_* 등)
+R1_COUNT=$(find "$FASTQ_DIR" \( -name "*_R1_*" -o -name "*_R1.*" -o -name "*_1.fq.gz" -o -name "*_1.fastq.gz" \) | wc -l)
+R2_COUNT=$(find "$FASTQ_DIR" \( -name "*_R2_*" -o -name "*_R2.*" -o -name "*_2.fq.gz" -o -name "*_2.fastq.gz" \) | wc -l)
 
 if [ "$R1_COUNT" -eq 0 ] || [ "$R2_COUNT" -eq 0 ]; then
     echo -e "${RED}Error: R1/R2 FASTQ files not found in ${FASTQ_DIR}${NC}"
     exit 1
 fi
 
-# 출력 디렉토리 생성
+# 출력 디렉토리 생성 (Nextflow .nextflow 캐시용)
 mkdir -p "${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME}"
+mkdir -p "${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME}/.nextflow"
 mkdir -p "${DATA_DIR}/output/${WORK_DIR}/${SAMPLE_NAME}"
 mkdir -p "${DATA_DIR}/log/${WORK_DIR}/${SAMPLE_NAME}"
 
@@ -122,11 +133,12 @@ echo "  FASTQ Directory: ${FASTQ_DIR}"
 echo "  Data Directory: ${DATA_DIR}"
 echo "  Reference Directory: ${REF_DIR}"
 echo "  Cleanup: ${CLEANUP:-disabled}"
+echo "  Skip CNV: $([ -n "$SKIP_CNV" ] && echo "enabled" || echo "disabled")"
 echo ""
 
 # Docker 이미지 확인
-if ! docker images | grep -q "dark-gene-pipeline"; then
-    echo -e "${RED}Error: Docker image 'dark-gene-pipeline' not found${NC}"
+if ! docker images | grep -q "carrier-screening"; then
+    echo -e "${RED}Error: Docker image 'carrier-screening' not found${NC}"
     echo "Please build the image first:"
     echo "  docker-compose -f docker/docker-compose.yml build"
     exit 1
@@ -136,29 +148,33 @@ fi
 echo -e "${YELLOW}Starting analysis...${NC}"
 echo ""
 
-# Docker 컨테이너 실행
-docker run --rm \
+# Docker 컨테이너 실행 (root로 실행 후 출력 파일 소유권 수정)
+# nextflow.config가 projectDir/../data/refs, data/bed 경로 사용 → /app/data 마운트 필요
+docker run --rm -t \
     -v "${DATA_DIR}/fastq:/data/fastq:ro" \
     -v "${DATA_DIR}/analysis:/data/analysis" \
     -v "${DATA_DIR}/output:/data/output" \
     -v "${DATA_DIR}/log:/data/log" \
-    -v "${REF_DIR}:/app/references:ro" \
+    -v "${DATA_DIR}/data:/app/data:ro" \
     -e NXF_OPTS="-Xms1g -Xmx4g" \
-    dark-gene-pipeline:latest \
+    -e NXF_CACHE_DIR="/data/analysis/${WORK_DIR}/${SAMPLE_NAME}/.nextflow" \
+    carrier-screening:latest \
     bash -c "
-        cd /app/bin && \
-        nextflow run main.nf \
-            --input_dir /data/fastq/${WORK_DIR}/${SAMPLE_NAME} \
+        cd /data/analysis/${WORK_DIR}/${SAMPLE_NAME} && \
+        nextflow -log /data/log/${WORK_DIR}/${SAMPLE_NAME}/nextflow.log run /app/bin/main.nf \
+            -ansi-log false \
+            -resume \
+            --fastq_dir /data/fastq/${WORK_DIR}/${SAMPLE_NAME} \
+            ${SKIP_CNV} \
             --outdir /data/analysis/${WORK_DIR}/${SAMPLE_NAME} \
             --output_dir /data/output/${WORK_DIR}/${SAMPLE_NAME} \
             --sample_name ${SAMPLE_NAME} \
             ${CLEANUP} \
-            -work-dir /data/analysis/${WORK_DIR}/${SAMPLE_NAME}/work \
+            -work-dir ./work \
             -with-report /data/log/${WORK_DIR}/${SAMPLE_NAME}/report.html \
             -with-trace /data/log/${WORK_DIR}/${SAMPLE_NAME}/trace.txt \
             -with-timeline /data/log/${WORK_DIR}/${SAMPLE_NAME}/timeline.html \
-            -with-dag /data/log/${WORK_DIR}/${SAMPLE_NAME}/dag.html \
-            2>&1 | tee /data/log/${WORK_DIR}/${SAMPLE_NAME}/nextflow.log
+            -with-dag /data/log/${WORK_DIR}/${SAMPLE_NAME}/dag.html
     "
 
 EXIT_CODE=$?
@@ -167,6 +183,10 @@ echo ""
 if [ $EXIT_CODE -eq 0 ]; then
     echo -e "${GREEN}✅ Analysis completed successfully!${NC}"
     echo ""
+    # Docker가 root로 생성한 파일 소유권 수정 (passwordless sudo 가능 시)
+    if sudo -n true 2>/dev/null; then
+        sudo chown -R "$(id -u):$(id -g)" "${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME}" "${DATA_DIR}/output/${WORK_DIR}/${SAMPLE_NAME}" "${DATA_DIR}/log/${WORK_DIR}/${SAMPLE_NAME}" 2>/dev/null || true
+    fi
     echo "Results:"
     echo "  Output: ${DATA_DIR}/output/${WORK_DIR}/${SAMPLE_NAME}"
     echo "  Logs: ${DATA_DIR}/log/${WORK_DIR}/${SAMPLE_NAME}"

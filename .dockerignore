@@ -28,7 +28,8 @@ data/
 # Nextflow
 work/
 .nextflow/
-.nextflow.*
+.nextflow.log
+.nextflow.log.*
 *.log.*
 results/
 final_archived_results/
@@ -44,6 +45,9 @@ refs/
 
 # Large model files
 models/
+
+# Genomics_Pipeline (large, mounted separately if needed)
+Genomics_Pipeline/
 
 # IDE
 .vscode

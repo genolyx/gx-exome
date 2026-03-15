@@ -2,7 +2,7 @@
 set -e
 
 echo "==================================="
-echo "Dark Gene Pipeline Container"
+echo "Carrier Screening Pipeline Container"
 echo "==================================="
 
 # Create necessary directories
