@@ -284,6 +284,8 @@ workflow.onComplete {
             def svOut = file("${params.output_dir}/sv")
             def repeatOut = file("${params.output_dir}/repeat")
             def pseudogeneOut = file("${params.output_dir}/pseudogene")
+            def qcOut = file("${params.output_dir}/qc")
+            def pipelineInfoOut = file("${params.output_dir}/pipeline_info")
             
             summaryOut.mkdirs()
             snapshotsOut.mkdirs()
@@ -292,6 +294,8 @@ workflow.onComplete {
             svOut.mkdirs()
             repeatOut.mkdirs()
             pseudogeneOut.mkdirs()
+            qcOut.mkdirs()
+            pipelineInfoOut.mkdirs()
             
             // Copy files using shell commands
             def copyScript = """
@@ -334,6 +338,35 @@ workflow.onComplete {
             if [ -d "${params.outdir}/pseudogene" ]; then
                 cp -r ${params.outdir}/pseudogene/* ${pseudogeneOut}/ 2>/dev/null || true
             fi
+            
+            # QC metrics (coverage, duplicate metrics)
+            if [ -d "${params.outdir}/coverage" ]; then
+                cp ${params.outdir}/coverage/*_qc_metrics.txt ${qcOut}/ 2>/dev/null || true
+                cp ${params.outdir}/coverage/*_target_coverage.txt ${qcOut}/ 2>/dev/null || true
+            fi
+            if [ -d "${params.outdir}/alignment" ]; then
+                cp ${params.outdir}/alignment/*_duplicate_metrics.txt ${qcOut}/ 2>/dev/null || true
+            fi
+            
+            # Pipeline info (trace, timeline, report)
+            if [ -d "${params.outdir}/pipeline_info" ]; then
+                cp ${params.outdir}/pipeline_info/trace.txt ${pipelineInfoOut}/ 2>/dev/null || true
+                cp ${params.outdir}/pipeline_info/timeline.html ${pipelineInfoOut}/ 2>/dev/null || true
+                cp ${params.outdir}/pipeline_info/report.html ${pipelineInfoOut}/ 2>/dev/null || true
+            fi
+            
+            # Pipeline completion marker with metadata (for service-daemon)
+            cat > ${params.output_dir}/pipeline_complete.json << MARKER
+            {
+                "status": "SUCCESS",
+                "run_name": "${runName}",
+                "duration": "${workflow.duration}",
+                "sample_name": "${params.sample_name ?: 'unknown'}",
+                "completed_at": "$(date -Iseconds)",
+                "output_dir": "${params.output_dir}",
+                "analysis_dir": "${params.outdir}"
+            }
+MARKER
             
             echo "Results copied to ${params.output_dir}"
             """

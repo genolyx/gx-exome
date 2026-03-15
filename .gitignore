@@ -99,10 +99,11 @@ refs/
 models/
 docker/data/
 
-# Genomics_Pipeline: *.py만 포함, 나머지 제외
+# Genomics_Pipeline: *.py와 LEGACY.md만 포함, 나머지 제외
 Genomics_Pipeline/**/*
 !Genomics_Pipeline/**/*/
 !Genomics_Pipeline/**/*.py
+!Genomics_Pipeline/**/LEGACY.md
 Genomics_Pipeline/venv/
 
 # ===== Nextflow =====
