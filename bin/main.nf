@@ -362,7 +362,7 @@ workflow.onComplete {
                 "run_name": "${runName}",
                 "duration": "${workflow.duration}",
                 "sample_name": "${params.sample_name ?: 'unknown'}",
-                "completed_at": "$(date -Iseconds)",
+                "completed_at": "\$(date -Iseconds)",
                 "output_dir": "${params.output_dir}",
                 "analysis_dir": "${params.outdir}"
             }

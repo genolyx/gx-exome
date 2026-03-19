@@ -156,6 +156,7 @@ docker run --rm -t \
     -v "${DATA_DIR}/output:/data/output" \
     -v "${DATA_DIR}/log:/data/log" \
     -v "${DATA_DIR}/data:/app/data:ro" \
+    -v "$(realpath "$(dirname "$0")/../bin"):/app/bin:ro" \
     -e NXF_OPTS="-Xms1g -Xmx4g" \
     -e NXF_CACHE_DIR="/data/analysis/${WORK_DIR}/${SAMPLE_NAME}/.nextflow" \
     carrier-screening:latest \
