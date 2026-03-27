@@ -79,21 +79,19 @@ nextflow run bin/main.nf \
   -profile docker
 ```
 
-### Docker Compose (with service-daemon)
+### Docker Compose (pipeline 이미지만)
 
 ```bash
 # 1. Configure environment
 cp .env.example .env
 # Edit .env with actual paths
 
-# 2. Start all services
+# 2. Start pipeline container (대시보드 등)
 cd docker
 docker compose up -d
 
-# 3. Access services
-# - Dashboard: http://localhost:5000
-# - service-daemon API: http://localhost:8000
-# - Test Portal: open service-daemon/portal/index.html
+# 3. Dashboard: http://localhost:5000
+#    service-daemon은 별도 레포에서 compose 실행
 ```
 
 ## service-daemon Integration
@@ -128,7 +126,7 @@ carrier-screening/
 │   └── modules/           # Process modules (10 files)
 ├── docker/                # Docker configuration
 │   ├── Dockerfile         # Pipeline container
-│   ├── docker-compose.yml # Full stack (pipeline + service-daemon)
+│   ├── docker-compose.yml # carrier-screening 컨테이너만
 │   ├── entrypoint.sh      # Container entrypoint
 │   └── supervisord.conf   # Process management
 ├── dashboard/             # Local analysis dashboard (Flask)

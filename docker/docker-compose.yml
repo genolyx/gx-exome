@@ -1,7 +1,7 @@
+# Carrier Screening pipeline stack (this repo only).
+# Portal / annotation API는 별도 genolyx/service-daemon 레포에서 실행합니다.
+
 services:
-  # ============================================================
-  # Carrier Screening Nextflow Pipeline
-  # ============================================================
   carrier-screening:
     build:
       context: ..
@@ -11,89 +11,22 @@ services:
     ports:
       - "5000:5000"   # Dashboard (local analysis management)
     volumes:
-      # Data directories
       - ${DATA_DIR:-../data}/fastq:/data/fastq
       - ${DATA_DIR:-../data}/analysis:/data/analysis
       - ${DATA_DIR:-../data}/output:/data/output
       - ${DATA_DIR:-../data}/log:/data/log
-      # Reference data (read-only)
       - ${REF_DIR:-../data/refs}:/app/references:ro
       - ${BED_DIR:-../data/bed}:/app/bed:ro
       - ${MODELS_DIR:-../models}:/app/models:ro
-      # Shared output volume (pipeline → service-daemon)
-      - pipeline-output:/data/output
     environment:
       - BASE_DIR=/data
       - NXF_OPTS=-Xms1g -Xmx4g
-      - SERVICE_DAEMON_URL=http://service-daemon:8000
     env_file:
       - ../.env
     restart: unless-stopped
-    networks:
-      - pipeline-network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
-
-  # ============================================================
-  # Service Daemon (Portal ↔ Pipeline 연동)
-  # ============================================================
-  service-daemon:
-    build:
-      context: ${SERVICE_DAEMON_DIR:-../../service-daemon}
-      dockerfile: Dockerfile
-    image: genolyx/service-daemon:latest
-    container_name: service-daemon
-    ports:
-      - "8000:8000"   # REST API (Portal 연동)
-    volumes:
-      # Pipeline output (read from pipeline results)
-      - pipeline-output:/data/output:ro
-      # Annotation databases
-      - ${CLINVAR_VCF:-./data/clinvar}:/data/annotation/clinvar:ro
-      - ${GNOMAD_DIR:-./data/gnomad}:/data/annotation/gnomad:ro
-      - ${HGMD_VCF:-./data/hgmd}:/data/annotation/hgmd:ro
-      # HPO and disease databases (bundled in service-daemon)
-      # Report output
-      - report-output:/data/reports
-    environment:
-      - ENABLED_SERVICES=carrier_screening
-      - PIPELINE_OUTPUT_DIR=/data/output
-      - REPORT_OUTPUT_DIR=/data/reports
-      # Annotation DB paths (inside container)
-      - CS_CLINVAR_VCF=/data/annotation/clinvar/clinvar.vcf.gz
-      - CS_GNOMAD_DIR=/data/annotation/gnomad
-      - CS_HPO_GENES_TO_PHENOTYPE=/app/data/hpo/genes_to_phenotype.txt
-      - CS_DISEASE_GENE_MAPPING=/app/data/db/disease_gene_mapping.json
-      - CS_KNOWN_GENE_LIST=/app/data/reference/known_gene_list.txt
-      - CS_REPORT_TEMPLATE_DIR=/app/data/templates
-      # Platform API (optional, for file upload)
-      - PLATFORM_API_URL=${PLATFORM_API_URL:-}
-      - PLATFORM_API_KEY=${PLATFORM_API_KEY:-}
-    env_file:
-      - ../.env
-    depends_on:
-      carrier-screening:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - pipeline-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-
-networks:
-  pipeline-network:
-    driver: bridge
-
-volumes:
-  pipeline-output:
-    driver: local
-  report-output:
-    driver: local
