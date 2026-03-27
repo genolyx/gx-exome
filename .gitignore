@@ -93,6 +93,7 @@ output/
 log/
 data/
 results/
+results_backup/
 final_archived_results/
 active_run/
 refs/
