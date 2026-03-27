@@ -28,6 +28,7 @@ Options:
     --variant-caller CALLER    Variant caller: gatk (default), deepvariant, or strelka2
     --skip-vep                 Skip VEP annotation (use legacy snpEff mode)
     --shared-ref-dir DIR       Shared reference root (default: /data/reference)
+    --fresh                    Delete sample work/ and .nextflow cache, then run (no -resume)
     -h, --help                 Show this help message
 
 Example:
@@ -57,6 +58,7 @@ ALIGNER="bwa-mem"
 VARIANT_CALLER="gatk"
 SKIP_VEP="true"
 SHARED_REF_DIR="/data/reference"
+FRESH=""
 
 # 파라미터 파싱
 while [[ $# -gt 0 ]]; do
@@ -104,6 +106,10 @@ while [[ $# -gt 0 ]]; do
         --shared-ref-dir)
             SHARED_REF_DIR="$2"
             shift 2
+            ;;
+        --fresh)
+            FRESH="1"
+            shift
             ;;
         -h|--help)
             usage
@@ -167,7 +173,31 @@ echo "  Aligner: ${ALIGNER}"
 echo "  Variant Caller: ${VARIANT_CALLER}"
 echo "  VEP Annotation: $([ "$SKIP_VEP" = "true" ] && echo "disabled (snpEff)" || echo "enabled")"
 echo "  Shared Ref Dir: ${SHARED_REF_DIR}"
+echo "  Fresh run: $([ -n "$FRESH" ] && echo "yes (work + .nextflow cleared, no -resume)" || echo "no")"
 echo ""
+
+ANALYSIS_SAMPLE_DIR="${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME}"
+if [ -n "$FRESH" ]; then
+    echo -e "${YELLOW}--fresh: removing Nextflow work and session cache...${NC}"
+    # Docker often leaves work/ as root:root on the host mount — plain rm fails
+    rm -rf "${ANALYSIS_SAMPLE_DIR}/work" "${ANALYSIS_SAMPLE_DIR}/.nextflow" 2>/dev/null || true
+    if [ -e "${ANALYSIS_SAMPLE_DIR}/work" ] || [ -e "${ANALYSIS_SAMPLE_DIR}/.nextflow" ]; then
+        echo -e "${YELLOW}  Remaining paths not removable as current user (Docker root); trying sudo...${NC}"
+        if ! sudo rm -rf "${ANALYSIS_SAMPLE_DIR}/work" "${ANALYSIS_SAMPLE_DIR}/.nextflow"; then
+            echo -e "${RED}Error: could not remove work/.nextflow. Run:${NC}"
+            echo "  sudo rm -rf \"${ANALYSIS_SAMPLE_DIR}/work\" \"${ANALYSIS_SAMPLE_DIR}/.nextflow\""
+            exit 1
+        fi
+    fi
+    echo "  Cleared: ${ANALYSIS_SAMPLE_DIR}/work"
+    echo "  Cleared: ${ANALYSIS_SAMPLE_DIR}/.nextflow"
+    echo ""
+fi
+
+NEXTFLOW_RESUME="-resume"
+if [ -n "$FRESH" ]; then
+    NEXTFLOW_RESUME=""
+fi
 
 # Docker 이미지 확인
 if ! docker images | grep -q "carrier-screening"; then
@@ -201,8 +231,7 @@ docker run --rm -t \
     bash -c "
         cd /data/analysis/${WORK_DIR}/${SAMPLE_NAME} && \
         nextflow -log /data/log/${WORK_DIR}/${SAMPLE_NAME}/nextflow.log run /app/bin/main.nf \
-            -ansi-log false \
-            -resume \
+            -ansi-log false ${NEXTFLOW_RESUME} \
             --fastq_dir /data/fastq/${WORK_DIR}/${SAMPLE_NAME} \
             --aligner ${ALIGNER} \
             --variant_caller ${VARIANT_CALLER} \
