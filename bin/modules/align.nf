@@ -23,7 +23,7 @@ process INDEX_BWA {
     script:
     """
     export TMPDIR=\$PWD
-    export CONDA_PKGS_DIRS=/home/sam/.cache/micromamba_pkgs
+    export CONDA_PKGS_DIRS=\$PWD/.cache/micromamba_pkgs
     export MAMBA_ROOT_PREFIX=\$PWD/micromamba
     mkdir -p \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX
     wget -q --no-check-certificate https://curl.se/ca/cacert.pem
@@ -56,7 +56,7 @@ process INDEX_BWA_MEM2 {
     script:
     """
     export TMPDIR=\$PWD
-    export CONDA_PKGS_DIRS=/home/sam/.cache/micromamba_pkgs
+    export CONDA_PKGS_DIRS=\$PWD/.cache/micromamba_pkgs
     export MAMBA_ROOT_PREFIX=\$PWD/micromamba
     mkdir -p \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX
     wget -q --no-check-certificate https://curl.se/ca/cacert.pem
@@ -90,7 +90,7 @@ process ALIGN_AND_SORT {
     """
     export TMPDIR=\$PWD
     export PATH=\$PWD:\$PATH
-    export CONDA_PKGS_DIRS=/home/sam/.cache/micromamba_pkgs
+    export CONDA_PKGS_DIRS=\$PWD/.cache/micromamba_pkgs
     export MAMBA_ROOT_PREFIX=\$PWD/micromamba
     mkdir -p \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX
     wget -q --no-check-certificate https://curl.se/ca/cacert.pem
@@ -135,7 +135,7 @@ process ALIGN_AND_SORT_BWA_MEM2 {
     """
     export TMPDIR=\$PWD
     export PATH=\$PWD:\$PATH
-    export CONDA_PKGS_DIRS=/home/sam/.cache/micromamba_pkgs
+    export CONDA_PKGS_DIRS=\$PWD/.cache/micromamba_pkgs
     export MAMBA_ROOT_PREFIX=\$PWD/micromamba
     mkdir -p \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX
     wget -q --no-check-certificate https://curl.se/ca/cacert.pem
@@ -216,7 +216,7 @@ process SAMTOOLS_BAM_STATS {
     """
     export TMPDIR=\$PWD
     export PATH=\$PWD:\$PATH
-    export CONDA_PKGS_DIRS=/home/sam/.cache/micromamba_pkgs
+    export CONDA_PKGS_DIRS=\$PWD/.cache/micromamba_pkgs
     export MAMBA_ROOT_PREFIX=\$PWD/micromamba
     mkdir -p \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX
     wget -q --no-check-certificate https://curl.se/ca/cacert.pem

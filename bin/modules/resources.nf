@@ -20,7 +20,7 @@ process PREPARE_VIZ_RESOURCES {
     # We build the environment ONCE here.
     
     export TMPDIR=\$PWD
-    export CONDA_PKGS_DIRS=/home/sam/.cache/micromamba_pkgs
+    export CONDA_PKGS_DIRS=\$PWD/.cache/micromamba_pkgs
     export MAMBA_ROOT_PREFIX=\$PWD/micromamba
     
     mkdir -p \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX

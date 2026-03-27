@@ -18,7 +18,7 @@ process PREPROCESS_INTERVALS {
     export PATH=\$PWD:\$PATH
     
     # Use SHARED cache for packages (speed up)
-    export CONDA_PKGS_DIRS=/home/sam/.cache/micromamba_pkgs
+    export CONDA_PKGS_DIRS=\$PWD/.cache/micromamba_pkgs
     
     # Keep runtime env isolated
     export MAMBA_ROOT_PREFIX=\$PWD/micromamba

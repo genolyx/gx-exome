@@ -195,6 +195,8 @@ docker run --rm -t \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -e NXF_OPTS="-Xms1g -Xmx4g" \
     -e NXF_CACHE_DIR="/data/analysis/${WORK_DIR}/${SAMPLE_NAME}/.nextflow" \
+    -e HOST_DATA_DIR="${DATA_DIR}" \
+    -e HOST_SHARED_REF_DIR="${SHARED_REF_DIR}" \
     carrier-screening:latest \
     bash -c "
         cd /data/analysis/${WORK_DIR}/${SAMPLE_NAME} && \
