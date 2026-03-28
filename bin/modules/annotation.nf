@@ -14,7 +14,7 @@
 //   - SIFT, PolyPhen-2 prediction scores
 //   - ClinVar significance (for cross-reference; primary ClinVar logic stays in daemon)
 //
-// The output VCF (*_annotated.vcf.gz) is the primary input to service-daemon.
+// The output VCF (*_{gatk,deepvariant,strelka2}_annotated.vcf.gz) is the primary input to service-daemon.
 // service-daemon parses the CSQ field and no longer needs to query
 // gnomAD/dbSNP VCF files directly, reducing daemon memory usage significantly.
 //
@@ -34,9 +34,9 @@ process VEP_ANNOTATION {
 
     output:
     tuple val(sample_id),
-          path("${sample_id}_annotated.vcf.gz"),
-          path("${sample_id}_annotated.vcf.gz.tbi"),  emit: vcf
-    path "${sample_id}_vep_summary.html",             emit: summary
+          path("${sample_id}_${params.variant_caller}_annotated.vcf.gz"),
+          path("${sample_id}_${params.variant_caller}_annotated.vcf.gz.tbi"),  emit: vcf
+    path "${sample_id}_${params.variant_caller}_vep_summary.html",             emit: summary
 
     script:
     // VEP fork count: use all available CPUs
@@ -70,8 +70,8 @@ process VEP_ANNOTATION {
     # --fork           : parallel processing
     vep \
         --input_file ${vcf} \
-        --output_file ${sample_id}_annotated.vcf.gz \
-        --stats_file ${sample_id}_vep_summary.html \
+        --output_file ${sample_id}_${params.variant_caller}_annotated.vcf.gz \
+        --stats_file ${sample_id}_${params.variant_caller}_vep_summary.html \
         --format vcf \
         --vcf \
         --compress_output bgzip \
@@ -100,7 +100,7 @@ process VEP_ANNOTATION {
         --no_progress
 
     # ── Index the output VCF ────────────────────────────────
-    tabix -p vcf ${sample_id}_annotated.vcf.gz
+    tabix -p vcf ${sample_id}_${params.variant_caller}_annotated.vcf.gz
     """
 }
 
@@ -125,9 +125,9 @@ process VEP_ANNOTATION_DOCKER {
 
     output:
     tuple val(sample_id),
-          path("${sample_id}_annotated.vcf.gz"),
-          path("${sample_id}_annotated.vcf.gz.tbi"),  emit: vcf
-    path "${sample_id}_vep_summary.html",             emit: summary
+          path("${sample_id}_${params.variant_caller}_annotated.vcf.gz"),
+          path("${sample_id}_${params.variant_caller}_annotated.vcf.gz.tbi"),  emit: vcf
+    path "${sample_id}_${params.variant_caller}_vep_summary.html",             emit: summary
 
     script:
     def vep_forks = task.cpus
@@ -136,8 +136,8 @@ process VEP_ANNOTATION_DOCKER {
 
     vep \
         --input_file ${vcf} \
-        --output_file ${sample_id}_annotated.vcf.gz \
-        --stats_file ${sample_id}_vep_summary.html \
+        --output_file ${sample_id}_${params.variant_caller}_annotated.vcf.gz \
+        --stats_file ${sample_id}_${params.variant_caller}_vep_summary.html \
         --format vcf \
         --vcf \
         --compress_output bgzip \
@@ -165,6 +165,6 @@ process VEP_ANNOTATION_DOCKER {
         --force_overwrite \
         --no_progress
 
-    tabix -p vcf ${sample_id}_annotated.vcf.gz
+    tabix -p vcf ${sample_id}_${params.variant_caller}_annotated.vcf.gz
     """
 }

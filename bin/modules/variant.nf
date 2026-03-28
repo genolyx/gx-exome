@@ -10,8 +10,8 @@
 //   - DeepVariant and Strelka2 do NOT require a separate VariantFiltration
 //     step. Their internal models handle filtering automatically.
 //   - All three processes emit the same channel signature:
-//       tuple val(sample_id), path("*.vcf.gz"), path("*.vcf.gz.tbi")
-//     so downstream processes (annotation, visualization) are unchanged.
+//       tuple val(sample_id), path("${sample_id}_${params.variant_caller}_filtered.vcf.gz"), path("*.tbi")
+//     Caller tag is gatk | deepvariant | strelka2 so outputs from different callers do not overwrite.
 // ============================================================
 
 // -------------------------------------------------------
@@ -29,7 +29,7 @@ process CALL_VARIANTS_GATK {
     path ref_dict
     path backbone_bed
     output:
-    tuple val(sample_id), path("${sample_id}_filtered.vcf.gz"), path("${sample_id}_filtered.vcf.gz.tbi"), emit: vcf
+    tuple val(sample_id), path("${sample_id}_${params.variant_caller}_filtered.vcf.gz"), path("${sample_id}_${params.variant_caller}_filtered.vcf.gz.tbi"), emit: vcf
     script:
     """
     export TMPDIR=\$PWD
@@ -67,7 +67,7 @@ process CALL_VARIANTS_GATK {
     gatk VariantFiltration \\
         -R ${ref_fasta} \\
         -V ${sample_id}_raw.vcf.gz \\
-        -O ${sample_id}_filtered.vcf.gz \\
+        -O ${sample_id}_${params.variant_caller}_filtered.vcf.gz \\
         --filter-expression "QD < 1.5"             --filter-name "QD1.5" \\
         --filter-expression "QUAL < 30.0"           --filter-name "QUAL30" \\
         --filter-expression "SOR > 4.0"             --filter-name "SOR4" \\
@@ -96,7 +96,7 @@ process CALL_VARIANTS_DEEPVARIANT {
     path ref_fai
     path backbone_bed
     output:
-    tuple val(sample_id), path("${sample_id}_filtered.vcf.gz"), path("${sample_id}_filtered.vcf.gz.tbi"), emit: vcf
+    tuple val(sample_id), path("${sample_id}_${params.variant_caller}_filtered.vcf.gz"), path("${sample_id}_${params.variant_caller}_filtered.vcf.gz.tbi"), emit: vcf
     path "${sample_id}.g.vcf.gz", emit: gvcf   // optional gVCF for joint calling
     script:
     """
@@ -143,8 +143,8 @@ process CALL_VARIANTS_DEEPVARIANT {
         BCFTOOLS=bcftools
     fi
 
-    \$BCFTOOLS view -f PASS -O z -o ${sample_id}_filtered.vcf.gz ${sample_id}_dv_raw.vcf.gz
-    \$BCFTOOLS index --tbi ${sample_id}_filtered.vcf.gz
+    \$BCFTOOLS view -f PASS -O z -o ${sample_id}_${params.variant_caller}_filtered.vcf.gz ${sample_id}_dv_raw.vcf.gz
+    \$BCFTOOLS index --tbi ${sample_id}_${params.variant_caller}_filtered.vcf.gz
     """
 }
 
@@ -167,7 +167,7 @@ process CALL_VARIANTS_STRELKA2 {
     path backbone_bed_gz
     path backbone_bed_tbi
     output:
-    tuple val(sample_id), path("${sample_id}_filtered.vcf.gz"), path("${sample_id}_filtered.vcf.gz.tbi"), emit: vcf
+    tuple val(sample_id), path("${sample_id}_${params.variant_caller}_filtered.vcf.gz"), path("${sample_id}_${params.variant_caller}_filtered.vcf.gz.tbi"), emit: vcf
     script:
     """
     export TMPDIR=\$PWD
@@ -192,7 +192,7 @@ process CALL_VARIANTS_STRELKA2 {
     python2 -c "
 import gzip, sys
 fin  = gzip.open('strelka_run/results/variants/variants.vcf.gz', 'rb')
-fout = open('${sample_id}_filtered_tmp.vcf', 'wb')
+fout = open('${sample_id}_${params.variant_caller}_filtered_tmp.vcf', 'wb')
 for line in fin:
     if line.startswith(b'#') or line.split(b'\\t')[6] == b'PASS':
         fout.write(line)
@@ -201,11 +201,11 @@ fout.close()
 "
 
     # Step 4: Compress with bundled bgzip (produces BGZF required by tabix)
-    bgzip ${sample_id}_filtered_tmp.vcf
-    mv ${sample_id}_filtered_tmp.vcf.gz ${sample_id}_filtered.vcf.gz
+    bgzip ${sample_id}_${params.variant_caller}_filtered_tmp.vcf
+    mv ${sample_id}_${params.variant_caller}_filtered_tmp.vcf.gz ${sample_id}_${params.variant_caller}_filtered.vcf.gz
 
     # Step 5: Index using bundled tabix
-    tabix -p vcf ${sample_id}_filtered.vcf.gz
+    tabix -p vcf ${sample_id}_${params.variant_caller}_filtered.vcf.gz
     """
 }
 
@@ -224,7 +224,7 @@ process CALL_VARIANTS {
     path ref_dict
     path backbone_bed
     output:
-    tuple val(sample_id), path("${sample_id}_filtered.vcf.gz"), path("${sample_id}_filtered.vcf.gz.tbi"), emit: vcf
+    tuple val(sample_id), path("${sample_id}_${params.variant_caller}_filtered.vcf.gz"), path("${sample_id}_${params.variant_caller}_filtered.vcf.gz.tbi"), emit: vcf
     script:
     """
     export TMPDIR=\$PWD
@@ -260,7 +260,7 @@ process CALL_VARIANTS {
     gatk VariantFiltration \\
         -R ${ref_fasta} \\
         -V ${sample_id}_raw.vcf.gz \\
-        -O ${sample_id}_filtered.vcf.gz \\
+        -O ${sample_id}_${params.variant_caller}_filtered.vcf.gz \\
         --filter-expression "QD < 1.5"             --filter-name "QD1.5" \\
         --filter-expression "QUAL < 30.0"           --filter-name "QUAL30" \\
         --filter-expression "SOR > 4.0"             --filter-name "SOR4" \\
