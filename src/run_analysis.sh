@@ -287,12 +287,9 @@ if [ -n "$FRESH" ]; then
     NEXTFLOW_RESUME=""
 fi
 
-# DeepVariant/Strelka2는 전용 Docker 컨테이너가 필요 → -profile docker
-# GATK/기본 조합은 carrier-screening 컨테이너 내 micromamba 방식으로 실행 (docker 불필요)
-NXF_PROFILE=""
-if [ "$VARIANT_CALLER" = "deepvariant" ] || [ "$VARIANT_CALLER" = "strelka2" ]; then
-    NXF_PROFILE="-profile docker"
-fi
+# Paraphase/SMAca/ExpansionHunter 등 biocontainer 전용 모듈은 variant caller 종류와
+# 무관하게 항상 Docker 컨테이너가 필요하므로 -profile docker 를 항상 활성화한다.
+NXF_PROFILE="-profile docker"
 
 # Docker 이미지 확인
 if ! docker images | grep -q "carrier-screening"; then
