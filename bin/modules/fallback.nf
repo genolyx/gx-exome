@@ -132,6 +132,8 @@ with open('${sample_id}_hba_fallback.txt', 'w') as out:
             out.write(f'  {v}\\n')
     else:
         out.write('No Hb Constant Spring variant (chr16:173598) detected.\\n')
+    out.write('\\n--- Alpha thalassemia (review) ---\\n')
+    out.write('The fallback analysis runs Freebayes on chr16:172000–178000 with ploidy 4 mainly for Hb Constant Spring at a fixed position — it is not a full α-thal SNV/indels genotype caller for all carriers.\\n')
     "
 
     # --- CYP21A2 Analysis ---

@@ -12,6 +12,7 @@ process GENERATE_SUMMARY_REPORT {
     path intron_depth_reports
     path snapshots
     path bed_file
+    path hba_paralog_tsvs
 
     output:
     path "*_summary_report.txt", emit: summary
@@ -300,6 +301,9 @@ def parse_paraphase(files):
                     continue
                 summary = []
                 for gene, info in data.items():
+                    # Paraphase may emit null for a gene (JSON null) or final_haplotypes: null
+                    if not isinstance(info, dict):
+                        continue
                     # Generic CN
                     if 'total_cn' in info:
                         summary.append(f"{gene}_CN={info['total_cn']}")
@@ -313,34 +317,30 @@ def parse_paraphase(files):
                     # GBA specific (Parsing Haplotypes for Gene vs Pseudogene)
                     if gene == 'GBA' and 'final_haplotypes' in info:
                         haps = info['final_haplotypes']
-                        gba_count = 0
-                        gbap1_count = 0
-                        other_count = 0
-                        
-                        hap_names = []
-                        for h in haps:
-                            # Handle both string and dict formats
-                            if isinstance(h, str):
-                                h_name = h
-                            else:
-                                h_name = h.get('haplotype', 'unknown')
-                            
-                            hap_names.append(h_name)
-                            lower_name = h_name.lower()
-                            
-                            if 'gbap1' in lower_name:
-                                gbap1_count += 1
-                            elif 'gba' in lower_name:
-                                gba_count += 1
-                            else:
-                                other_count += 1
-                        
-                        summary.append(f"GBA_Gene_CN={gba_count}")
-                        summary.append(f"GBAP1_CN={gbap1_count}")
-                        if other_count > 0:
-                            summary.append(f"Other_CN={other_count}")
-                        
-                        summary.append(f"Haps: {', '.join(hap_names)}")
+                        if haps is not None:
+                            gba_count = 0
+                            gbap1_count = 0
+                            other_count = 0
+                            hap_names = []
+                            for h in haps:
+                                # Handle both string and dict formats
+                                if isinstance(h, str):
+                                    h_name = h
+                                else:
+                                    h_name = h.get('haplotype', 'unknown')
+                                hap_names.append(h_name)
+                                lower_name = h_name.lower()
+                                if 'gbap1' in lower_name:
+                                    gbap1_count += 1
+                                elif 'gba' in lower_name:
+                                    gba_count += 1
+                                else:
+                                    other_count += 1
+                            summary.append(f"GBA_Gene_CN={gba_count}")
+                            summary.append(f"GBAP1_CN={gbap1_count}")
+                            if other_count > 0:
+                                summary.append(f"Other_CN={other_count}")
+                            summary.append(f"Haps: {', '.join(hap_names)}")
 
                 results[sample] = "; ".join(summary)
         except json.JSONDecodeError:
@@ -379,7 +379,23 @@ def parse_fallback(files, label):
         except:
             results[sample] = "Error"
     return results
-    
+
+def parse_hba_paralog_trace(files):
+    # Lines from hba_paralog_pileup.py: HBA_PARALOG_CN_RATIO / HBA_PARALOG_CN_TRACE (comment lines in TSV).
+    results = {}
+    for f in files:
+        sample = os.path.basename(f).replace('_hba_paralog.tsv', '')
+        lines = []
+        try:
+            with open(f) as fh:
+                for line in fh:
+                    if line.startswith('# ') and 'HBA_PARALOG' in line:
+                        lines.append(line[2:].strip())
+        except Exception:
+            pass
+        results[sample] = lines
+    return results
+
 def parse_eh(files):
     results = {}
     for f in files:
@@ -584,6 +600,7 @@ manta_files = glob.glob("*_manta.vcf.gz")
 gcnv_files = glob.glob("*_cnv.vcf.gz")
 para_files = glob.glob("*_paraphase.json")
 hba_files = glob.glob("*_hba_fallback.txt")
+hba_paralog_files = glob.glob("*_hba_paralog.tsv")
 cyp_files = glob.glob("*_cyp21a2_fallback.txt")
 eh_files = glob.glob("*_eh.vcf")
 sma_files = glob.glob("*_smaca.txt")
@@ -593,12 +610,15 @@ m_res = parse_manta(manta_files)
 g_res = parse_gcnv(gcnv_files)
 p_res = parse_paraphase(para_files)
 h_res = parse_fallback(hba_files, "hba")
+hba_paralog_lines = parse_hba_paralog_trace(hba_paralog_files)
 c_res = parse_fallback(cyp_files, "cyp21a2")
 e_res = parse_eh(eh_files)
 s_res, smaca_extras = parse_smaca(sma_files)
 v_res = parse_intron_verify(ver_files)
 
-all_samples = sorted(set(m_res.keys()) | set(g_res.keys()) | set(p_res.keys()))
+all_samples = sorted(
+    set(m_res.keys()) | set(g_res.keys()) | set(p_res.keys()) | set(hba_paralog_lines.keys())
+)
 
 # Generate Individual Reports
 header = "Sample\\tParaphase(SMN/GBA)\\tSMAca\\tFragileX(FMR1)\\tHBA_Ratio\\tCYP21A2_Ratio\\tLarge_SVs(Manta/GCNV)\\tQC_Warnings"
@@ -655,7 +675,10 @@ for s in all_samples:
         out.write("HBA ANALYSIS (Alpha Thalassemia - Dosage):\\n")
         hba_val = h_res.get(s, 'No Data')
         hba_fmt = hba_val.replace('|', '\\n  ')
-        out.write(f"  {hba_fmt}\\n\\n")
+        out.write(f"  {hba_fmt}\\n")
+        for _hl in hba_paralog_lines.get(s, []):
+            out.write(f"  {_hl}\\n")
+        out.write("\\n")
         
         out.write("CYP21A2 ANALYSIS (CAH - Dosage):\\n")
         cyp_val = c_res.get(s, 'No Data')

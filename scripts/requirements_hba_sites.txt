@@ -1,0 +1,3 @@
+# Optional deps for scripts/extract_hba_paralog_sites.py
+biopython>=1.80
+pysam>=0.21.0

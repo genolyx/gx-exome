@@ -588,6 +588,8 @@ def parse_paraphase(files):
 
                 for gene, info in data.items():
                     summary = []
+                    if not isinstance(info, dict):
+                        continue
                     # Copy Numbers
                     if 'total_cn' in info:
                         summary.append(f"{gene}_CN={info['total_cn']}")
@@ -599,8 +601,9 @@ def parse_paraphase(files):
                     # Haplotypes details
                     if 'final_haplotypes' in info:
                          haps = info['final_haplotypes']
-                         hap_names = [h['haplotype'] for h in haps if 'haplotype' in h]
-                         summary.append(f"Haps: {', '.join(hap_names)}")
+                         if haps is not None:
+                             hap_names = [h['haplotype'] for h in haps if isinstance(h, dict) and 'haplotype' in h]
+                             summary.append(f"Haps: {', '.join(hap_names)}")
                     
                     results[sample][gene] = "; ".join(summary)
         except Exception as e:

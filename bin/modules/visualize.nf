@@ -211,6 +211,17 @@ EOF
         --output temp_report.html \\
         --title "Visual Evidence: ${sample_id}"
 
+    # --- Alpha thalassemia review note (IGV report footer) ---
+    python3 -c "
+html = open('temp_report.html').read()
+alpha_box = '''<div id='alpha_thal_review_note' style='margin-top:24px;padding:16px;border:1px solid #2c5282;border-radius:8px;background:#f0f7ff;max-width:900px;'>
+<h3 style='margin:0 0 8px 0;'>Alpha thalassemia (review)</h3>
+<p style='margin:0;line-height:1.5;color:#1a365d;'>The fallback analysis runs Freebayes on <code>chr16:172000–178000</code> with ploidy 4 mainly for Hb Constant Spring at a fixed position — it is not a full α-thal SNV/indels genotype caller for all carriers.</p>
+</div>'''
+html = html.replace('</body>', alpha_box + chr(10) + '</body>')
+open('temp_report.html', 'w').write(html)
+"
+
     # --- 2. Inject Hidden SVG at Bottom ---
     if [ -n "\$eh_img" ]; then
         echo "Injecting hidden SVG container..."

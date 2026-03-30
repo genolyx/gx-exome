@@ -1,0 +1,17 @@
+idx	chrom	hba1_pos	hba1_ref	hba1_ref_frac	hba1_pileup	hba2_pos	hba2_ref	hba2_ref_frac	hba2_pileup
+1	chr16	177188	G	1.0000	A=0 C=0 G=1 T=0 N=0 depth=1	173384	T	1.0000	A=0 C=0 G=0 T=1 N=0 depth=1
+2	chr16	177426	G	1.0000	A=0 C=0 G=11 T=0 N=0 depth=11	173615	A	1.0000	A=11 C=0 G=0 T=0 N=0 depth=11
+3	chr16	177430	A	1.0000	A=11 C=0 G=0 T=0 N=0 depth=11	173619	G	1.0000	A=0 C=0 G=11 T=0 N=0 depth=11
+4	chr16	177432	G	1.0000	A=0 C=0 G=11 T=0 N=0 depth=11	173621	T	1.0000	A=0 C=0 G=0 T=11 N=0 depth=11
+5	chr16	177434	T	1.0000	A=0 C=0 G=0 T=12 N=0 depth=12	173623	C	1.0000	A=0 C=12 G=0 T=0 N=0 depth=12
+6	chr16	177437	T	1.0000	A=0 C=0 G=0 T=13 N=0 depth=13	173626	C	1.0000	A=0 C=13 G=0 T=0 N=0 depth=13
+7	chr16	177443	C	1.0000	A=0 C=14 G=0 T=0 N=0 depth=14	173632	G	1.0000	A=0 C=0 G=14 T=0 N=0 depth=14
+8	chr16	177444	T	1.0000	A=0 C=0 G=0 T=14 N=0 depth=14	173633	C	1.0000	A=0 C=14 G=0 T=0 N=0 depth=14
+9	chr16	177455	C	1.0000	A=0 C=14 G=0 T=0 N=0 depth=14	173644	A	1.0000	A=14 C=0 G=0 T=0 N=0 depth=14
+10	chr16	177456	C	1.0000	A=0 C=14 G=0 T=0 N=0 depth=14	173645	A	1.0000	A=14 C=0 G=0 T=0 N=0 depth=14
+11	chr16	177458	A	1.0000	A=14 C=0 G=0 T=0 N=0 depth=14	173647	G	1.0000	A=0 C=0 G=14 T=0 N=0 depth=14
+12	chr16	177460	C	1.0000	A=0 C=14 G=0 T=0 N=0 depth=14	173649	G	1.0000	A=0 C=0 G=14 T=0 N=0 depth=14
+13	chr16	177473	T	1.0000	A=0 C=0 G=0 T=11 N=0 depth=11	173662	C	1.0000	A=0 C=11 G=0 T=0 N=0 depth=11
+14	chr16	177475	C	1.0000	A=0 C=10 G=0 T=0 N=0 depth=10	173664	T	1.0000	A=0 C=0 G=0 T=10 N=0 depth=10
+15	chr16	177482	C	1.0000	A=0 C=10 G=0 T=0 N=0 depth=10	173671	G	1.0000	A=0 C=0 G=10 T=0 N=0 depth=10
+16	chr16	177519	G	1.0000	A=0 C=0 G=2 T=0 N=0 depth=2	173707	A	1.0000	A=2 C=0 G=0 T=0 N=0 depth=2

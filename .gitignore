@@ -137,3 +137,11 @@ index_v*.html
 # ===== Micromamba =====
 micromamba/
 micromamba_bin
+
+# ===== Local HBA demo data (large hg38 chr16 download) =====
+scripts/_demo_ref/chr16.fa
+scripts/_demo_ref/chr16.fa.fai
+scripts/_demo_ref/*.bam
+scripts/_demo_ref/*.bam.bai
+scripts/_demo_ref/.venv/
+scripts/.venv_hba/

@@ -39,6 +39,7 @@ include { EXPANSION_HUNTER }        from './modules/repeat'
 include { MANTA_SV }                from './modules/sv'
 include { DEPTH_ANALYSIS }          from './modules/coverage'
 include { FALLBACK_ANALYSIS }       from './modules/fallback'
+include { HBA_PARALOG_PILEUP }      from './modules/hba_paralog'
 include { GENERATE_VISUAL_EVIDENCE } from './modules/visualize'
 include { PREPARE_VIZ_RESOURCES }   from './modules/resources'
 
@@ -224,6 +225,13 @@ workflow {
         )
     }
 
+    hba_paralog_py = Channel.fromPath("${projectDir}/modules/hba_paralog_pileup.py", checkIfExists: true)
+    hba_paralog_in = bam_ch
+        .combine(Channel.value(file(params.hba_paralog_sites, checkIfExists: true)))
+        .combine(hba_paralog_py)
+        .map { sid, bam, bai, sites, py -> tuple(sid, bam, bai, sites, py) }
+    HBA_PARALOG_PILEUP(hba_paralog_in)
+
     // -------------------------------------------------------
     // 3. Track 2: Pseudogene Resolution
     // -------------------------------------------------------
@@ -338,7 +346,8 @@ workflow {
         SMACA_RUN.out.txt.map { it[1] }.collect(),
         DEPTH_ANALYSIS.out.intron_report.collect(),
         GENERATE_VISUAL_EVIDENCE.out.snapshots.collect(),
-        file(params.backbone_bed)
+        file(params.backbone_bed),
+        HBA_PARALOG_PILEUP.out.tsv.collect()
     )
 }
 
