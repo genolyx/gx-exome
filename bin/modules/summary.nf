@@ -703,7 +703,7 @@ def load_cyp21_hotspots(tsv_path):
 
 def sample_from_variant_vcf(path):
     base = os.path.basename(path)
-    m = re.match(r'^(.+)_(gatk|deepvariant|strelka2)_(annotated|filtered)\\.vcf\\.gz$', base)
+    m = re.match(r'^(.+)_(gatk|deepvariant|strelka2)_(annotated|filtered)\\.vcf\\.gz\$', base)
     return m.group(1) if m else None
 
 def scan_cyp21_hotspots(vcf_path, hotspots):
@@ -908,6 +908,8 @@ for s in all_samples:
             for _row in hotspot_by_sample[s]:
                 out.write(f"  [{_row['id']}] {_row['label']}: {_row['status']} — {_row['detail']}\\n")
         out.write("  BAM pileup (same 7 NM_000500 sites, chr6 reference; cross-check SNV calls):\\n")
+        out.write("  Legend: expected_alts = nucleotide(s) for the catalogued hotspot allele (not guessed from BAM).\\n")
+        out.write("  ref_frac / alt_frac = fraction of reads matching REF vs those matching expected_alts (low depth = noisy).\\n")
         _hp = hotspot_pileup_by_sample.get(s)
         if not _hp:
             out.write("  (No *_cyp21_hotspot_pileup.tsv — see results/fallback when CYP21_HOTSPOT_PILEUP runs.)\\n")

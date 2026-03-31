@@ -353,8 +353,8 @@ workflow {
     manta_vcf_ch = MANTA_SV.out.vcf.map { it[1] }.collect()
     gcnv_vcf_ch  = params.skip_cnv ? Channel.value([]) : POSTPROCESS_GCNV.out.vcf.map { it[1] }.collect()
 
-    // Per-sample annotated (VEP) or filtered VCFs for CYP21A2 hotspot screening in the summary report
-    annotated_vcf_for_summary = params.backbone_bed ? annotated_vcf_ch.map { it[1] }.collect() : Channel.value([])
+    // Per-sample annotated (VEP) or filtered VCFs + tabix index — pysam.fetch() in summary requires .tbi staged beside .vcf.gz
+    annotated_vcf_for_summary = params.backbone_bed ? annotated_vcf_ch.flatMap { [it[1], it[2]] }.collect() : Channel.value([])
 
     GENERATE_SUMMARY_REPORT(
         manta_vcf_ch,

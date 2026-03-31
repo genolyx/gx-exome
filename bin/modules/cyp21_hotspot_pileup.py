@@ -157,6 +157,8 @@ def main() -> None:
         out.write(
             "# ##CYP21_HOTSPOT_PILEUP_GRCh38 chr6 reference coordinates; "
             "A/C/G/T in reference forward strand (matches cyp21_paralog_pileup). "
+            "expected_alts = catalogued hotspot alternate(s) from cyp21a2_hotspots.tsv (not inferred from data). "
+            "alt_frac = reads matching those alts / depth. "
             "Compare alt_frac to variant caller GT at the same positions.\n"
         )
 
