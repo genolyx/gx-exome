@@ -1,13 +1,13 @@
-# Carrier Screening pipeline stack (this repo only).
+# gx-exome pipeline stack (this repo only).
 # Portal / annotation API는 별도 genolyx/service-daemon 레포에서 실행합니다.
 
 services:
-  carrier-screening:
+  gx-exome:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: carrier-screening:latest
-    container_name: carrier-screening
+    image: gx-exome:latest
+    container_name: gx-exome
     ports:
       - "5000:5000"   # Dashboard (local analysis management)
     volumes:

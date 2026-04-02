@@ -174,7 +174,7 @@ repair_order_tree_permissions() {
 
     if command -v docker >/dev/null 2>&1 && id -nG | grep -qw docker && docker info &>/dev/null; then
         if docker run --rm --platform linux/amd64 \
-            --name "carrier-perm-${WORK_DIR}" \
+            --name "gx-exome-perm-${WORK_DIR}" \
             -e WORK_DIR="$WORK_DIR" \
             -e CHOWN_SPEC="$CHOWN_SPEC" \
             -v "${DATA_DIR}/analysis:/fa" \
@@ -229,7 +229,7 @@ ensure_sample_output_dirs() {
     fi
     echo -e "${YELLOW}Creating output dirs via docker (host mkdir failed, e.g. parent dir owned by root)...${NC}"
     docker run --rm --platform linux/amd64 \
-        --name "carrier-mkdir-${WORK_DIR}" \
+        --name "gx-exome-mkdir-${WORK_DIR}" \
         -e WORK_DIR="$WORK_DIR" \
         -e SAMPLE_NAME="$SAMPLE_NAME" \
         -e CHOWN_SPEC="$CHOWN_SPEC" \
@@ -296,8 +296,8 @@ fi
 NXF_PROFILE="-profile docker"
 
 # Docker 이미지 확인
-if ! docker images | grep -q "carrier-screening"; then
-    echo -e "${RED}Error: Docker image 'carrier-screening' not found${NC}"
+if ! docker images | grep -q "gx-exome"; then
+    echo -e "${RED}Error: Docker image 'gx-exome' not found${NC}"
     echo "Please build the image first:"
     echo "  docker-compose -f docker/docker-compose.yml build"
     exit 1
@@ -330,7 +330,7 @@ if DOCKER_SOCK_GID="$(getent group docker 2>/dev/null | cut -d: -f3)" && [ -n "$
 fi
 
 # docker ps NAME: order id (-w) + sample (sanitize for Docker: [a-zA-Z0-9][a-zA-Z0-9_.-]*)
-NF_DOCKER_NAME_RAW="carrier-${WORK_DIR}-${SAMPLE_NAME}"
+NF_DOCKER_NAME_RAW="gx-exome-${WORK_DIR}-${SAMPLE_NAME}"
 NF_DOCKER_NAME="$(printf '%s' "$NF_DOCKER_NAME_RAW" | sed -e 's/[^a-zA-Z0-9_.-]/-/g' -e 's/^[-_.]*//' -e 's/^$/carrier-unknown/')"
 NF_DOCKER_NAME="${NF_DOCKER_NAME:0:200}"
 
@@ -358,7 +358,7 @@ docker run --rm -t --name "$NF_DOCKER_NAME" \
     -e NXF_DATA_DIR="${DATA_DIR}" \
     -e NXF_DOCKER_TASK_USER="${CHOWN_SPEC}" \
     -e HOST_WORK_DIR="${HOST_WORK_DIR}" \
-    carrier-screening:latest \
+    gx-exome:latest \
     bash -c "
         cd ${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME} && \
         nextflow -log ${DATA_DIR}/log/${WORK_DIR}/${SAMPLE_NAME}/nextflow.log run /app/bin/main.nf \
