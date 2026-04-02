@@ -28,20 +28,12 @@ process GENERATE_VISUAL_EVIDENCE {
     cp -f ${eh_realigned_bam} FMR1_eh_realigned.bam
     cp -f ${eh_realigned_bai} FMR1_eh_realigned.bam.bai
 
-    # SMA regions — coords align with nextflow.config (smn_c840_*_grch38_1bp); default IGV = SMN1 c.840 exon 7
-    printf "chr5\\t${params.smn_c840_sm1_grch38_1bp - 120}\\t${params.smn_c840_sm1_grch38_1bp + 120}\\tSMA_SMN1_c840_exon7\\n" > regions.bed
-    printf "chr5\\t${params.smn_c840_sm2_grch38_1bp - 120}\\t${params.smn_c840_sm2_grch38_1bp + 120}\\tSMA_SMN2_c840_exon7\\n" >> regions.bed
-    printf "chr5\\t70925000\\t70954000\\tSMA_SMN1_gene_region\\n" >> regions.bed
-    printf "chr5\\t70073000\\t70082000\\tSMA_SMN2_gene_region\\n" >> regions.bed
+    # Single SMA panel: SMN1 NM_000344 c.840 pileup (GRCh38 ref C vs alt T); ±120 bp around smn_c840_sm1_grch38_1bp
+    printf "chr5\\t${params.smn_c840_sm1_grch38_1bp - 120}\\t${params.smn_c840_sm1_grch38_1bp + 120}\\tSMA_SMN1_c840\\n" > regions.bed
     printf "chr16\\t173300\\t173800\\tHb_Constant_Spring\\n" >> regions.bed
-    printf "chr16\\t160000\\t190000\\tAlpha_Thal_Structural\\n" >> regions.bed
-    printf "chr1\\t155232540\\t155240432\\tGBA_Locus\\n" >> regions.bed
-    printf "chr6\\t32038000\\t32045000\\tCYP21A2_Locus\\n" >> regions.bed
-    printf "chrX\\t147911600\\t147912450\\tFragileX_FMR1\\n" >> regions.bed
 
     printf '##gff-version 3\\n' > sma_landmarks.gff3
-    printf 'chr5\\tcarrier_screening\\tregion\\t%d\\t%d\\t.\\t+\\t.\\tID=SMN1_c840;Name=NM_000344_c840\\n' ${params.smn_c840_sm1_grch38_1bp} ${params.smn_c840_sm1_grch38_1bp} >> sma_landmarks.gff3
-    printf 'chr5\\tcarrier_screening\\tregion\\t%d\\t%d\\t.\\t+\\t.\\tID=SMN2_c840;Name=NM_017411_c840\\n' ${params.smn_c840_sm2_grch38_1bp} ${params.smn_c840_sm2_grch38_1bp} >> sma_landmarks.gff3
+    printf 'chr5\\tcarrier_screening\\tregion\\t%d\\t%d\\t.\\t+\\t.\\tID=SMN1_c840;Name=NM_000344_c.840_refC_altT\\n' ${params.smn_c840_sm1_grch38_1bp} ${params.smn_c840_sm1_grch38_1bp} >> sma_landmarks.gff3
 
     # SMN unified BAM (same bwa-mem2 + mini-ref as SMACA_RUN) → project chr5_local onto hg38 chr5 for IGV
     export SMN_START=${params.smn_unified_region_start}
@@ -162,13 +154,13 @@ tracks.append({
     "visibilityWindow": -1
 })
 
-# 1b. SMN — same unified mini-ref alignment as SMAca (bwa-mem2 → chr5_local), lifted to hg38
+# 1b. SMN1 c.840 — unified mini-ref (same as SMAca); use with Color by base to see T vs ref C at landmark
 tracks.append({
     "type": "alignment",
     "format": "bam",
     "url": "smn_combined_final.bam",
     "indexURL": "smn_combined_final.bam.bai",
-    "name": "SMN (unified ref, SMAca-matched)",
+    "name": "SMN1 c.840 pileup (unified ref, SMAca-matched)",
     "displayMode": "EXPANDED",
     "colorBy": "base",
     "height": 550,
@@ -178,12 +170,12 @@ tracks.append({
     "visibilityWindow": -1
 })
 
-# 1c. SMA c.840 landmarks (SMN1 / SMN2 NM positions)
+# 1c. SMN1 c.840 position (ref C vs alt T)
 tracks.append({
     "type": "annotation",
     "format": "gff3",
     "url": "sma_landmarks.gff3",
-    "name": "SMA landmarks (c.840)",
+    "name": "SMN1 c.840 (NM_000344)",
     "displayMode": "EXPANDED",
     "color": "darkgreen",
     "height": 60,
