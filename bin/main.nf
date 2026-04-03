@@ -66,7 +66,7 @@ workflow {
     }
 
     println "=" * 60
-    println "Carrier Screening Pipeline"
+    println "GX-Exome Pipeline"
     println "  Aligner        : ${params.aligner}"
     println "  Variant Caller : ${params.variant_caller}"
     println "  VEP Annotation : ${params.skip_vep ? 'SKIPPED' : 'ENABLED'}"

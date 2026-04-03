@@ -33,7 +33,7 @@ process GENERATE_VISUAL_EVIDENCE {
     printf "chr16\\t173300\\t173800\\tHb_Constant_Spring\\n" >> regions.bed
 
     printf '##gff-version 3\\n' > sma_landmarks.gff3
-    printf 'chr5\\tcarrier_screening\\tregion\\t%d\\t%d\\t.\\t+\\t.\\tID=SMN1_c840;Name=NM_000344_c.840_refC_altT\\n' ${params.smn_c840_sm1_grch38_1bp} ${params.smn_c840_sm1_grch38_1bp} >> sma_landmarks.gff3
+    printf 'chr5\\tgx_exome\\tregion\\t%d\\t%d\\t.\\t+\\t.\\tID=SMN1_c840;Name=NM_000344_c.840_refC_altT\\n' ${params.smn_c840_sm1_grch38_1bp} ${params.smn_c840_sm1_grch38_1bp} >> sma_landmarks.gff3
 
     # SMN unified BAM (same bwa-mem2 + mini-ref as SMACA_RUN) → project chr5_local onto hg38 chr5 for IGV
     export SMN_START=${params.smn_unified_region_start}

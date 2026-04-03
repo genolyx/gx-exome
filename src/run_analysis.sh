@@ -26,11 +26,16 @@ Options:
     -r, --ref-dir DIR          Reference directory path (default: ./refs)
     -c, --cleanup              Clean up work directory after completion
     --skip-cnv                 Skip CNV analysis (single sample 시 필요, cohort mode는 2+ 샘플 필요)
-    --aligner ALIGNER          Aligner to use: bwa-mem (default) or bwa-mem2
-    --variant-caller CALLER    Variant caller: gatk (default), deepvariant, or strelka2
+    --aligner ALIGNER          Aligner to use: bwa-mem or bwa-mem2 (default)
+    --variant-caller CALLER    Variant caller: gatk, deepvariant (default), or strelka2
     --skip-vep                 Skip VEP annotation (use legacy snpEff mode)
     --shared-ref-dir DIR       Shared reference root (default: /data/reference)
     --fresh                    Delete sample work/ and .nextflow cache, then run (no -resume)
+    --panel PANEL              Exome capture panel name (default: twist-exome2)
+                               Built-in: twist-exome2
+                               Custom:   <data-dir>/data/bed/<PANEL>/targets.bed{,.gz,.gz.tbi}
+    --backbone-bed PATH        Direct BED path (overrides --panel; .gz/.gz.tbi auto-derived)
+    --list-panels              List available panels and exit
     -h, --help                 Show this help message
 
 Environment:
@@ -42,6 +47,15 @@ Example:
     $0 -w 2601 -s Sample_A10
     $0 --work-dir 2601 --sample Sample_A10 --cleanup
     $0 -w 2601 -s Sample_A10 --aligner bwa-mem2 --variant-caller deepvariant
+    $0 -w 2601 -s Sample_A10 --panel agilent-v7
+    $0 -w 2601 -s Sample_A10 --backbone-bed /data/custom/panel.bed
+
+Adding a new panel (no script change needed):
+    mkdir -p <data-dir>/data/bed/<panel-name>
+    cp panel.bed          <data-dir>/data/bed/<panel-name>/targets.bed
+    cp panel.bed.gz       <data-dir>/data/bed/<panel-name>/targets.bed.gz
+    cp panel.bed.gz.tbi   <data-dir>/data/bed/<panel-name>/targets.bed.gz.tbi
+    Then run: $0 -w 2601 -s Sample_A10 --panel <panel-name>
 
 Directory Structure:
     <data-dir>/
@@ -61,11 +75,15 @@ DATA_DIR="$(pwd)/data"
 REF_DIR="$(pwd)/refs"
 CLEANUP=""
 SKIP_CNV=""
-ALIGNER="bwa-mem"
-VARIANT_CALLER="gatk"
+ALIGNER="bwa-mem2"
+VARIANT_CALLER="deepvariant"
 SKIP_VEP="true"
 SHARED_REF_DIR="/data/reference"
 FRESH=""
+PANEL="twist-exome2"
+BACKBONE_BED=""
+BACKBONE_BED_GZ=""
+BACKBONE_BED_TBI=""
 
 # 파라미터 파싱
 while [[ $# -gt 0 ]]; do
@@ -118,6 +136,18 @@ while [[ $# -gt 0 ]]; do
             FRESH="1"
             shift
             ;;
+        --panel)
+            PANEL="$2"
+            shift 2
+            ;;
+        --backbone-bed)
+            BACKBONE_BED="$2"
+            shift 2
+            ;;
+        --list-panels)
+            LIST_PANELS="1"
+            shift
+            ;;
         -h|--help)
             usage
             ;;
@@ -137,6 +167,9 @@ fi
 # 절대 경로로 변환
 DATA_DIR=$(realpath "$DATA_DIR")
 REF_DIR=$(realpath "$REF_DIR")
+
+# 패널 BED 경로 해석 (DATA_DIR 절대경로 확정 후 호출)
+resolve_panel_bed
 
 # 디렉토리 존재 확인
 FASTQ_DIR="${DATA_DIR}/fastq/${WORK_DIR}/${SAMPLE_NAME}"
@@ -212,6 +245,77 @@ repair_order_tree_permissions() {
     [ "$quiet" = quiet ] || echo -e "${YELLOW}  Order trees: collaborative chmod only (for chown use docker group or passwordless sudo).${NC}"
 }
 
+# 패널 이름 → BED 파일 경로 해석
+# 우선순위: --backbone-bed 직접 지정 > data/bed/<name>/ 디렉터리 > 내장 패널 매핑
+resolve_panel_bed() {
+    local bed_dir="${DATA_DIR}/data/bed"
+
+    # --list-panels: 사용 가능한 패널 목록 출력
+    if [ -n "$LIST_PANELS" ]; then
+        echo "Built-in panels:"
+        echo "  twist-exome2  (default)"
+        echo ""
+        echo "Custom panels (${bed_dir}/<panel-name>/):"
+        local found=0
+        for d in "${bed_dir}"/*/; do
+            [ -d "$d" ] && echo "  $(basename "$d")" && found=1
+        done
+        [ "$found" -eq 0 ] && echo "  (none)"
+        echo ""
+        echo "To add a new panel:"
+        echo "  mkdir -p ${bed_dir}/<panel-name>"
+        echo "  cp targets.bed        ${bed_dir}/<panel-name>/targets.bed"
+        echo "  cp targets.bed.gz     ${bed_dir}/<panel-name>/targets.bed.gz"
+        echo "  cp targets.bed.gz.tbi ${bed_dir}/<panel-name>/targets.bed.gz.tbi"
+        exit 0
+    fi
+
+    # --backbone-bed 직접 지정: .gz / .tbi 자동 유도
+    if [ -n "$BACKBONE_BED" ]; then
+        [ -z "$BACKBONE_BED_GZ" ]  && BACKBONE_BED_GZ="${BACKBONE_BED}.gz"
+        [ -z "$BACKBONE_BED_TBI" ] && BACKBONE_BED_TBI="${BACKBONE_BED}.gz.tbi"
+
+    # data/bed/<name>/ 디렉터리가 있으면 사용 (신규 패널 자동 인식)
+    elif [ -d "${bed_dir}/${PANEL}" ]; then
+        BACKBONE_BED="${bed_dir}/${PANEL}/targets.bed"
+        BACKBONE_BED_GZ="${bed_dir}/${PANEL}/targets.bed.gz"
+        BACKBONE_BED_TBI="${bed_dir}/${PANEL}/targets.bed.gz.tbi"
+
+    # 내장 패널 매핑 (기존 파일 구조와의 하위 호환)
+    elif [ "$PANEL" = "twist-exome2" ]; then
+        local prefix="Twist_Exome2.0_plus_Comprehensive_Exome_Spikein_targets_covered_annotated_hg38"
+        BACKBONE_BED="${bed_dir}/${prefix}.bed"
+        BACKBONE_BED_GZ="${bed_dir}/${prefix}.bed.gz"
+        BACKBONE_BED_TBI="${bed_dir}/${prefix}.bed.gz.tbi"
+
+    else
+        echo -e "${RED}Error: Unknown panel '${PANEL}'${NC}"
+        echo ""
+        echo "Available panels:"
+        echo "  twist-exome2  (built-in)"
+        for d in "${bed_dir}"/*/; do
+            [ -d "$d" ] && echo "  $(basename "$d")"
+        done
+        echo ""
+        echo "To add panel '${PANEL}':"
+        echo "  mkdir -p ${bed_dir}/${PANEL}"
+        echo "  cp targets.bed        ${bed_dir}/${PANEL}/targets.bed"
+        echo "  cp targets.bed.gz     ${bed_dir}/${PANEL}/targets.bed.gz"
+        echo "  cp targets.bed.gz.tbi ${bed_dir}/${PANEL}/targets.bed.gz.tbi"
+        exit 1
+    fi
+
+    # BED 파일 존재 확인
+    local missing=0
+    for f in "$BACKBONE_BED" "$BACKBONE_BED_GZ" "$BACKBONE_BED_TBI"; do
+        if [ ! -f "$f" ]; then
+            echo -e "${RED}Error: Panel file not found: ${f}${NC}"
+            missing=1
+        fi
+    done
+    [ "$missing" -eq 1 ] && exit 1
+}
+
 # 출력 디렉토리 생성. 과거 Docker가 analysis/<work>/ 를 root로 만들면 일반 사용자 mkdir 불가 → docker로 보정
 ensure_sample_output_dirs() {
     local a o l
@@ -249,7 +353,7 @@ ensure_sample_output_dirs() {
 ensure_sample_output_dirs
 
 echo "======================================"
-echo "Carrier Screening Pipeline - Sample Analysis"
+echo "GX-Exome Pipeline - Sample Analysis"
 echo "======================================"
 echo ""
 echo -e "${GREEN}Configuration:${NC}"
@@ -265,6 +369,8 @@ echo "  Variant Caller: ${VARIANT_CALLER}"
 echo "  VEP Annotation: $([ "$SKIP_VEP" = "true" ] && echo "disabled (snpEff)" || echo "enabled")"
 echo "  Shared Ref Dir: ${SHARED_REF_DIR}"
 echo "  Fresh run: $([ -n "$FRESH" ] && echo "yes (work + .nextflow cleared, no -resume)" || echo "no")"
+echo "  Panel: ${PANEL}"
+echo "  Backbone BED: ${BACKBONE_BED}"
 echo "  File ownership (CHOWN_SPEC): ${CHOWN_SPEC}"
 echo ""
 
@@ -368,9 +474,9 @@ docker run --rm -t --name "$NF_DOCKER_NAME" \
             --ref_fai ${DATA_DIR}/data/refs/GRCh38.fasta.fai \
             --ref_dict ${DATA_DIR}/data/refs/GRCh38.dict \
             --ref_bwa_indices ${DATA_DIR}/data/refs/bwa_index \
-            --backbone_bed ${DATA_DIR}/data/bed/Twist_Exome2.0_plus_Comprehensive_Exome_Spikein_targets_covered_annotated_hg38.bed \
-            --backbone_bed_gz ${DATA_DIR}/data/bed/Twist_Exome2.0_plus_Comprehensive_Exome_Spikein_targets_covered_annotated_hg38.bed.gz \
-            --backbone_bed_tbi ${DATA_DIR}/data/bed/Twist_Exome2.0_plus_Comprehensive_Exome_Spikein_targets_covered_annotated_hg38.bed.gz.tbi \
+            --backbone_bed ${BACKBONE_BED} \
+            --backbone_bed_gz ${BACKBONE_BED_GZ} \
+            --backbone_bed_tbi ${BACKBONE_BED_TBI} \
             --vep_cache_dir ${DATA_DIR}/data/refs/vep_cache \
             --dark_genes_plus_bed ${DATA_DIR}/data/bed/dark_genes_plus.bed \
             --hba_bed ${DATA_DIR}/data/bed/hba_targets.bed \

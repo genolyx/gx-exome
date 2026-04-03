@@ -21,7 +21,7 @@ The `service-daemon` project replaces both `daemon.py` (file watcher) and `api_s
    git clone https://github.com/genolyx/service-daemon.git
    ```
 
-2. Configure for Carrier Screening:
+2. Configure for GX-Exome:
    ```bash
    cp .env.local .env
    # Edit .env with actual paths
