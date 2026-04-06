@@ -127,7 +127,8 @@ process MOSDEPTH_PER_BASE_QC {
     publishDir "${params.outdir}/qc", mode: 'copy'
 
     input:
-    tuple val(sample_id), path(bam), path(bai), path(gene_bed, mode: 'copy'), val(build_gene_tsv)
+    // Note: path(..., mode: 'copy') is not valid inside tuple(); plain path() relies on NXF_DATA_DIR mount for BED.
+    tuple val(sample_id), path(bam), path(bai), path(gene_bed), val(build_gene_tsv)
 
     output:
     path "${sample_id}.mosdepth.per-base.bed.gz", emit: per_base
