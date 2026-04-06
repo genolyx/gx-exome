@@ -116,3 +116,179 @@ process DEPTH_ANALYSIS {
     fi
     """
 }
+
+// -------------------------------------------------------
+// Genome-wide mosdepth per-base (tabix) + optional gene-level TSV for service-daemon
+// Publishes under qc/ (same tree as SAMTOOLS_BAM_STATS) for extract_qc_summary / gene coverage.
+// -------------------------------------------------------
+process MOSDEPTH_PER_BASE_QC {
+    tag "$sample_id"
+    label 'paraphase'
+    publishDir "${params.outdir}/qc", mode: 'copy'
+
+    input:
+    tuple val(sample_id), path(bam), path(bai), path(gene_bed, mode: 'copy'), val(build_gene_tsv)
+
+    output:
+    path "${sample_id}.mosdepth.per-base.bed.gz", emit: per_base
+    path "${sample_id}.mosdepth.per-base.bed.gz.tbi", emit: per_base_index
+    path "${sample_id}_gene_coverage.tsv", emit: gene_tsv
+
+    script:
+    """
+    set -e
+    export TMPDIR=\$PWD
+    export HOME=\$PWD
+    export PIP_CACHE_DIR=\$PWD/.cache/pip
+    export XDG_CACHE_HOME=\$PWD/.cache/xdg
+    export PATH=\$PWD:\$PATH
+    export CONDA_PKGS_DIRS=\$PWD/.cache/micromamba_pkgs
+    export MAMBA_ROOT_PREFIX=\$PWD/micromamba
+
+    mkdir -p \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX \$PIP_CACHE_DIR \$XDG_CACHE_HOME
+
+    wget -q --no-check-certificate https://curl.se/ca/cacert.pem || true
+    export SSL_CERT_FILE=\$PWD/cacert.pem
+    export MAMBA_SSL_VERIFY=false
+
+    if [ ! -f "micromamba_bin" ]; then
+        wget -qO micromamba_bin https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-linux-64 \\
+            && chmod +x micromamba_bin || true
+    fi
+
+    if [ -f micromamba_bin ] && [ ! -x ./env/bin/samtools ]; then
+        ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge samtools=1.16.1 mosdepth=0.3.3 python=3.11 -y
+    fi
+    [ -x ./env/bin/samtools ] && [ -x ./env/bin/mosdepth ] && [ -x ./env/bin/tabix ] && [ -x ./env/bin/python3 ] || { echo "ERROR: samtools/mosdepth/tabix/python3 env missing"; exit 1; }
+
+    export PATH=\$PWD/env/bin:\$PATH
+
+    if [ ! -f "${bam}.bai" ]; then
+        ln -s ${bai} ${bam}.bai
+    fi
+
+    PREFIX="${sample_id}.mosdepth"
+    mosdepth -t ${task.cpus} "\$PREFIX" ${bam}
+
+    PB="\${PREFIX}.per-base.bed.gz"
+    if [ ! -f "\$PB" ]; then
+        echo "ERROR: expected \$PB from mosdepth"
+        ls -la
+        exit 1
+    fi
+
+    if tabix -p bed "\$PB" 2>/dev/null; then
+        echo "tabix index OK"
+    else
+        echo "WARN: tabix failed; re-bgzip for block gzip"
+        zcat "\$PB" | bgzip -c > "\$PB.tmp" && mv "\$PB.tmp" "\$PB"
+        tabix -p bed "\$PB"
+    fi
+
+    # Decode embedded copy of modules/mosdepth_gene_coverage_tsv.py (avoids staging .py into paraphase container).
+    if [ "${build_gene_tsv}" = "true" ]; then
+        base64 -d <<'MGC_B64' > mosdepth_gene_coverage_tsv.py
+IyEvdXNyL2Jpbi9lbnYgcHl0aG9uMwoiIiIKQnVpbGQgcGVyLWdlbmUgY292ZXJhZ2UgVFNWIGZy
+b20gbW9zZGVwdGggcGVyLWJhc2UgKHRhYml4LWluZGV4ZWQpICsgcGFuZWwgQkVELgoKQkVEIGNv
+bHVtbiA0IGlzIHRyZWF0ZWQgYXMgdGhlIGdlbmUga2V5IChIR05DLXN0eWxlIHRhcmdldHMpLiBJ
+bnRlcnZhbHMgcGVyIGdlbmUgYXJlCm1lcmdlZCBvbiBlYWNoIGNocm9tb3NvbWU7IHBlci1iYXNl
+IHJvd3MgYXJlIGNsaXBwZWQgdG8gdGhvc2UgaW50ZXJ2YWxzLgoKT3V0cHV0IGNvbHVtbnMgbWF0
+Y2ggZGFlbW9uLWZyaWVuZGx5IG5hbWVzOiBnZW5lLCBtZWFuX2NvdmVyYWdlLCBwY3RfYmFzZXNf
+MTB4LCBwY3RfYmFzZXNfMjB4LgoiIiIKZnJvbSBfX2Z1dHVyZV9fIGltcG9ydCBhbm5vdGF0aW9u
+cwoKaW1wb3J0IGFyZ3BhcnNlCmltcG9ydCBzdWJwcm9jZXNzCmltcG9ydCBzeXMKZnJvbSBjb2xs
+ZWN0aW9ucyBpbXBvcnQgZGVmYXVsdGRpY3QKZnJvbSB0eXBpbmcgaW1wb3J0IERpY3QsIExpc3Qs
+IFR1cGxlCgoKSW50ZXJ2YWwgPSBUdXBsZVtzdHIsIGludCwgaW50XSAgIyBjaHJvbSwgc3RhcnQs
+IGVuZCAoMC1iYXNlZCBoYWxmLW9wZW4pCgoKZGVmIF9wYXJzZV9iZWQocGF0aDogc3RyKSAtPiBE
+aWN0W3N0ciwgTGlzdFtJbnRlcnZhbF1dOgogICAgIiIiR3JvdXAgaW50ZXJ2YWxzIGJ5IGNvbHVt
+biA0IChnZW5lKS4gU2tpcHMgcm93cyB3aXRob3V0IGEgbmFtZS4iIiIKICAgIGJ5X2dlbmU6IERp
+Y3Rbc3RyLCBMaXN0W0ludGVydmFsXV0gPSBkZWZhdWx0ZGljdChsaXN0KQogICAgd2l0aCBvcGVu
+KHBhdGgsIGVuY29kaW5nPSJ1dGYtOCIsIGVycm9ycz0icmVwbGFjZSIpIGFzIGY6CiAgICAgICAg
+Zm9yIGxpbmUgaW4gZjoKICAgICAgICAgICAgbGluZSA9IGxpbmUuc3RyaXAoKQogICAgICAgICAg
+ICBpZiBub3QgbGluZSBvciBsaW5lLnN0YXJ0c3dpdGgoIiMiKSBvciBsaW5lLnN0YXJ0c3dpdGgo
+InRyYWNrICIpOgogICAgICAgICAgICAgICAgY29udGludWUKICAgICAgICAgICAgcGFydHMgPSBs
+aW5lLnNwbGl0KCJcdCIpCiAgICAgICAgICAgIGlmIGxlbihwYXJ0cykgPCA0OgogICAgICAgICAg
+ICAgICAgY29udGludWUKICAgICAgICAgICAgY2hyb20sIHMsIGUsIG5hbWUgPSBwYXJ0c1swXSwg
+cGFydHNbMV0sIHBhcnRzWzJdLCBwYXJ0c1szXS5zdHJpcCgpCiAgICAgICAgICAgIGlmIG5vdCBu
+YW1lOgogICAgICAgICAgICAgICAgY29udGludWUKICAgICAgICAgICAgdHJ5OgogICAgICAgICAg
+ICAgICAgc3RhcnRfaSA9IGludChzKQogICAgICAgICAgICAgICAgZW5kX2kgPSBpbnQoZSkKICAg
+ICAgICAgICAgZXhjZXB0IFZhbHVlRXJyb3I6CiAgICAgICAgICAgICAgICBjb250aW51ZQogICAg
+ICAgICAgICBpZiBlbmRfaSA8PSBzdGFydF9pOgogICAgICAgICAgICAgICAgY29udGludWUKICAg
+ICAgICAgICAgYnlfZ2VuZVtuYW1lXS5hcHBlbmQoKGNocm9tLCBzdGFydF9pLCBlbmRfaSkpCiAg
+ICByZXR1cm4gYnlfZ2VuZQoKCmRlZiBfbWVyZ2VfaW50ZXJ2YWxzKGludGVydmFsczogTGlzdFtJ
+bnRlcnZhbF0pIC0+IExpc3RbSW50ZXJ2YWxdOgogICAgYnlfY2hyb206IERpY3Rbc3RyLCBMaXN0
+W1R1cGxlW2ludCwgaW50XV1dID0gZGVmYXVsdGRpY3QobGlzdCkKICAgIGZvciBjaHJvbSwgcywg
+ZSBpbiBpbnRlcnZhbHM6CiAgICAgICAgYnlfY2hyb21bY2hyb21dLmFwcGVuZCgocywgZSkpCiAg
+ICBtZXJnZWQ6IExpc3RbSW50ZXJ2YWxdID0gW10KICAgIGZvciBjaHJvbSwgaXZzIGluIHNvcnRl
+ZChieV9jaHJvbS5pdGVtcygpLCBrZXk9bGFtYmRhIHg6IHhbMF0pOgogICAgICAgIGl2cy5zb3J0
+KGtleT1sYW1iZGEgeDogKHhbMF0sIHhbMV0pKQogICAgICAgIGN1cl9zLCBjdXJfZSA9IGl2c1sw
+XQogICAgICAgIGZvciBzLCBlIGluIGl2c1sxOl06CiAgICAgICAgICAgIGlmIHMgPD0gY3VyX2U6
+CiAgICAgICAgICAgICAgICBjdXJfZSA9IG1heChjdXJfZSwgZSkKICAgICAgICAgICAgZWxzZToK
+ICAgICAgICAgICAgICAgIG1lcmdlZC5hcHBlbmQoKGNocm9tLCBjdXJfcywgY3VyX2UpKQogICAg
+ICAgICAgICAgICAgY3VyX3MsIGN1cl9lID0gcywgZQogICAgICAgIG1lcmdlZC5hcHBlbmQoKGNo
+cm9tLCBjdXJfcywgY3VyX2UpKQogICAgcmV0dXJuIG1lcmdlZAoKCmRlZiBfYWx0X2Nocm9tKGM6
+IHN0cikgLT4gc3RyOgogICAgaWYgYy5zdGFydHN3aXRoKCJjaHIiKToKICAgICAgICByZXR1cm4g
+Y1szOl0gaWYgbGVuKGMpID4gMyBlbHNlIGMKICAgIHJldHVybiAiY2hyIiArIGMKCgpkZWYgX3Rh
+Yml4X2xpbmVzKGJnejogc3RyLCBjaHJvbTogc3RyLCBzdGFydDogaW50LCBlbmQ6IGludCkgLT4g
+TGlzdFtzdHJdOgogICAgIiIiUXVlcnkgcGVyLWJhc2UgQkVEOyB1c2UgMC1iYXNlZCBoYWxmLW9w
+ZW4gaW50ZXJ2YWxzIChtYXRjaGVzIEJFRCBzdG9yYWdlKS4iIiIKICAgIGZvciBjaCBpbiAoY2hy
+b20sIF9hbHRfY2hyb20oY2hyb20pKToKICAgICAgICByID0gZiJ7Y2h9OntzdGFydH0te2VuZH0i
+CiAgICAgICAgdHJ5OgogICAgICAgICAgICBvdXQgPSBzdWJwcm9jZXNzLmNoZWNrX291dHB1dCgK
+ICAgICAgICAgICAgICAgIFsidGFiaXgiLCAiLS16ZXJvLWJhc2VkIiwgYmd6LCByXSwKICAgICAg
+ICAgICAgICAgIHN0ZGVycj1zdWJwcm9jZXNzLkRFVk5VTEwsCiAgICAgICAgICAgICAgICB0ZXh0
+PVRydWUsCiAgICAgICAgICAgICkKICAgICAgICBleGNlcHQgc3VicHJvY2Vzcy5DYWxsZWRQcm9j
+ZXNzRXJyb3I6CiAgICAgICAgICAgIGNvbnRpbnVlCiAgICAgICAgaWYgb3V0LnN0cmlwKCk6CiAg
+ICAgICAgICAgIHJldHVybiBvdXQuc3BsaXRsaW5lcygpCiAgICByZXR1cm4gW10KCgpkZWYgX2Fj
+Y3VtdWxhdGVfaW50ZXJ2YWwoCiAgICBiZ3o6IHN0ciwKICAgIGNocm9tOiBzdHIsCiAgICBnczog
+aW50LAogICAgZ2U6IGludCwKICAgIHRvdGFsX2Jhc2VzOiBpbnQsCiAgICBzdW1fZGVwdGg6IGlu
+dCwKICAgIGJhc2VzX2dlXzEwOiBpbnQsCiAgICBiYXNlc19nZV8yMDogaW50LAopIC0+IFR1cGxl
+W2ludCwgaW50LCBpbnQsIGludF06CiAgICAiIiJBZ2dyZWdhdGUgZGVwdGggb3ZlciBbZ3MsIGdl
+KS4gSW50ZXJ2YWwgbGVuZ3RoIGlzIGFsd2F5cyAoZ2UgLSBncyk7IGdhcHMgaW4gdGFiaXggPSBk
+ZXB0aCAwLiIiIgogICAgc3BhbiA9IGdlIC0gZ3MKICAgIGlmIHNwYW4gPD0gMDoKICAgICAgICBy
+ZXR1cm4gdG90YWxfYmFzZXMsIHN1bV9kZXB0aCwgYmFzZXNfZ2VfMTAsIGJhc2VzX2dlXzIwCiAg
+ICBjb3ZlcmVkID0gMAogICAgZm9yIGxpbmUgaW4gX3RhYml4X2xpbmVzKGJneiwgY2hyb20sIGdz
+LCBnZSk6CiAgICAgICAgcGFydHMgPSBsaW5lLnJzdHJpcCgpLnNwbGl0KCJcdCIpCiAgICAgICAg
+aWYgbGVuKHBhcnRzKSA8IDQ6CiAgICAgICAgICAgIGNvbnRpbnVlCiAgICAgICAgdHJ5OgogICAg
+ICAgICAgICBycyA9IGludChwYXJ0c1sxXSkKICAgICAgICAgICAgcmVfID0gaW50KHBhcnRzWzJd
+KQogICAgICAgICAgICBkZXB0aCA9IGludChmbG9hdChwYXJ0c1szXSkpCiAgICAgICAgZXhjZXB0
+IChWYWx1ZUVycm9yLCBJbmRleEVycm9yKToKICAgICAgICAgICAgY29udGludWUKICAgICAgICBv
+c18gPSBtYXgocnMsIGdzKQogICAgICAgIG9lID0gbWluKHJlXywgZ2UpCiAgICAgICAgaWYgb2Ug
+PD0gb3NfOgogICAgICAgICAgICBjb250aW51ZQogICAgICAgIGxuID0gb2UgLSBvc18KICAgICAg
+ICBjb3ZlcmVkICs9IGxuCiAgICAgICAgc3VtX2RlcHRoICs9IGRlcHRoICogbG4KICAgICAgICBp
+ZiBkZXB0aCA+PSAxMDoKICAgICAgICAgICAgYmFzZXNfZ2VfMTAgKz0gbG4KICAgICAgICBpZiBk
+ZXB0aCA+PSAyMDoKICAgICAgICAgICAgYmFzZXNfZ2VfMjAgKz0gbG4KICAgIHVuY292ZXJlZCA9
+IHNwYW4gLSBtaW4oY292ZXJlZCwgc3BhbikKICAgIHRvdGFsX2Jhc2VzICs9IHNwYW4KICAgICMg
+dW5jb3ZlcmVkIGJhc2VzIGNvbnRyaWJ1dGUgMCBkZXB0aCBhbmQgZG8gbm90IGNvdW50IHRvd2Fy
+ZCA+PTEwIC8gPj0yMAogICAgcmV0dXJuIHRvdGFsX2Jhc2VzLCBzdW1fZGVwdGgsIGJhc2VzX2dl
+XzEwLCBiYXNlc19nZV8yMAoKCmRlZiB3cml0ZV90c3YoYmd6OiBzdHIsIGJlZDogc3RyLCBvdXRf
+cGF0aDogc3RyKSAtPiBOb25lOgogICAgZ2VuZXMgPSBfcGFyc2VfYmVkKGJlZCkKICAgIHJvd3M6
+IExpc3RbVHVwbGVbc3RyLCBmbG9hdCwgZmxvYXQsIGZsb2F0XV0gPSBbXQogICAgZm9yIGdlbmUg
+aW4gc29ydGVkKGdlbmVzLmtleXMoKSk6CiAgICAgICAgbWVyZ2VkID0gX21lcmdlX2ludGVydmFs
+cyhnZW5lc1tnZW5lXSkKICAgICAgICB0YiA9IHNkID0gYjEwID0gYjIwID0gMAogICAgICAgIGZv
+ciBjaHJvbSwgZ3MsIGdlIGluIG1lcmdlZDoKICAgICAgICAgICAgdGIsIHNkLCBiMTAsIGIyMCA9
+IF9hY2N1bXVsYXRlX2ludGVydmFsKGJneiwgY2hyb20sIGdzLCBnZSwgdGIsIHNkLCBiMTAsIGIy
+MCkKICAgICAgICBpZiB0YiA8PSAwOgogICAgICAgICAgICBtZWFuX2MgPSAwLjAKICAgICAgICAg
+ICAgcDEwID0gcDIwID0gMC4wCiAgICAgICAgZWxzZToKICAgICAgICAgICAgbWVhbl9jID0gc2Qg
+LyB0YgogICAgICAgICAgICBwMTAgPSAxMDAuMCAqIGIxMCAvIHRiCiAgICAgICAgICAgIHAyMCA9
+IDEwMC4wICogYjIwIC8gdGIKICAgICAgICByb3dzLmFwcGVuZCgoZ2VuZSwgbWVhbl9jLCBwMTAs
+IHAyMCkpCgogICAgd2l0aCBvcGVuKG91dF9wYXRoLCAidyIsIGVuY29kaW5nPSJ1dGYtOCIpIGFz
+IGY6CiAgICAgICAgZi53cml0ZSgiZ2VuZVx0bWVhbl9jb3ZlcmFnZVx0cGN0X2Jhc2VzXzEweFx0
+cGN0X2Jhc2VzXzIweFxuIikKICAgICAgICBmb3IgZ2VuZSwgbWVhbl9jLCBwMTAsIHAyMCBpbiBy
+b3dzOgogICAgICAgICAgICBmLndyaXRlKGYie2dlbmV9XHR7bWVhbl9jOi40Zn1cdHtwMTA6LjRm
+fVx0e3AyMDouNGZ9XG4iKQoKCmRlZiBtYWluKCkgLT4gaW50OgogICAgYXAgPSBhcmdwYXJzZS5B
+cmd1bWVudFBhcnNlcihkZXNjcmlwdGlvbj0iR2VuZS1sZXZlbCBjb3ZlcmFnZSBUU1YgZnJvbSBt
+b3NkZXB0aCBwZXItYmFzZSArIEJFRC4iKQogICAgYXAuYWRkX2FyZ3VtZW50KCJwZXJfYmFzZV9i
+Z3oiLCBoZWxwPSJtb3NkZXB0aCAqLnBlci1iYXNlLmJlZC5neiAodGFiaXggaW5kZXhlZCkiKQog
+ICAgYXAuYWRkX2FyZ3VtZW50KCJnZW5lX2JlZCIsIGhlbHA9IkJFRCB3aXRoIEhHTkMgKG9yIGxh
+YmVsKSBpbiBjb2x1bW4gNCIpCiAgICBhcC5hZGRfYXJndW1lbnQoIm91dF90c3YiLCBoZWxwPSJP
+dXRwdXQgVFNWIHBhdGgiKQogICAgYXJncyA9IGFwLnBhcnNlX2FyZ3MoKQogICAgdHJ5OgogICAg
+ICAgIHdyaXRlX3RzdihhcmdzLnBlcl9iYXNlX2JneiwgYXJncy5nZW5lX2JlZCwgYXJncy5vdXRf
+dHN2KQogICAgZXhjZXB0IE9TRXJyb3IgYXMgZToKICAgICAgICBwcmludChmIkVSUk9SOiB7ZX0i
+LCBmaWxlPXN5cy5zdGRlcnIpCiAgICAgICAgcmV0dXJuIDEKICAgIHJldHVybiAwCgoKaWYgX19u
+YW1lX18gPT0gIl9fbWFpbl9fIjoKICAgIHN5cy5leGl0KG1haW4oKSkK
+MGC_B64
+        python3 mosdepth_gene_coverage_tsv.py "\$PB" ${gene_bed} ${sample_id}_gene_coverage.tsv
+    else
+        echo -e "gene\\tmean_coverage\\tpct_bases_10x\\tpct_bases_20x" > ${sample_id}_gene_coverage.tsv
+    fi
+    """
+}

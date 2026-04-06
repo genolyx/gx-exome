@@ -8,6 +8,10 @@ params.output_dir = null
 params.sample_name = null
 params.skip_vep = false
 params.vep_cache_dir = "${projectDir}/../data/refs/vep_cache"
+// Defaults also here so behavior is defined even if nextflow.config is not picked up
+params.skip_mosdepth_per_base = false
+params.skip_gene_coverage_tsv = false
+params.gene_coverage_bed = null
 
 // -------------------------------------------------------
 // Module imports
@@ -37,7 +41,7 @@ include { PARAPHASE_RUN; SMN_UNIFIED_C840_BAM; SMACA_RUN; PARAPHASE_RESCUE } fro
 include { GENERATE_SUMMARY_REPORT } from './modules/summary'
 include { EXPANSION_HUNTER }        from './modules/repeat'
 include { MANTA_SV }                from './modules/sv'
-include { DEPTH_ANALYSIS }          from './modules/coverage'
+include { DEPTH_ANALYSIS; MOSDEPTH_PER_BASE_QC } from './modules/coverage'
 include { FALLBACK_ANALYSIS }       from './modules/fallback'
 include { HBA_PARALOG_PILEUP }      from './modules/hba_paralog'
 include { CYP21_PARALOG_PILEUP }    from './modules/cyp21_paralog'
@@ -65,11 +69,15 @@ workflow {
         error "Invalid variant_caller '${params.variant_caller}'. Choose one of: ${validCallers.join(', ')}"
     }
 
+    def mosdepthPerBaseOn = !java.lang.Boolean.parseBoolean(
+        params.skip_mosdepth_per_base != null ? params.skip_mosdepth_per_base.toString() : 'false'
+    )
     println "=" * 60
     println "GX-Exome Pipeline"
     println "  Aligner        : ${params.aligner}"
     println "  Variant Caller : ${params.variant_caller}"
     println "  VEP Annotation : ${params.skip_vep ? 'SKIPPED' : 'ENABLED'}"
+    println "  MOSDEPTH per-base (qc/, daemon gene coverage): ${mosdepthPerBaseOn ? 'ENABLED' : 'SKIPPED (skip_mosdepth_per_base)'}"
     println "=" * 60
 
     // Channel for FASTQ pairs
@@ -121,6 +129,21 @@ workflow {
 
     // Use MarkDuplicated BAM for all downstream processes
     bam_ch = MARK_DUPLICATES.out.bam
+
+    // mosdepth per-base + tabix under qc/ (service-daemon gene coverage); optional *_gene_coverage.tsv
+    if (mosdepthPerBaseOn) {
+        def geneTsvOn = !java.lang.Boolean.parseBoolean(
+            params.skip_gene_coverage_tsv != null ? params.skip_gene_coverage_tsv.toString() : 'false'
+        )
+        def geneCovBedPath = geneTsvOn
+            ? (params.gene_coverage_bed ?: params.backbone_bed)
+            : "${projectDir}/modules/empty_gene_coverage.bed"
+        def geneCovBed = file(geneCovBedPath, checkIfExists: true)
+        def buildGeneTsv = geneTsvOn ? 'true' : 'false'
+        MOSDEPTH_PER_BASE_QC(
+            bam_ch.combine(Channel.value(geneCovBed)).combine(Channel.value(buildGeneTsv))
+        )
+    }
 
     // -------------------------------------------------------
     // 2. Track 1: Global CNV & SV
@@ -468,6 +491,9 @@ workflow.onComplete {
             if [ -d "${params.outdir}/qc" ]; then
                 cp ${params.outdir}/qc/*.stats.txt ${qcOut}/ 2>/dev/null || true
                 cp ${params.outdir}/qc/*.bam.stats ${qcOut}/ 2>/dev/null || true
+                cp ${params.outdir}/qc/*.mosdepth.per-base.bed.gz ${qcOut}/ 2>/dev/null || true
+                cp ${params.outdir}/qc/*.mosdepth.per-base.bed.gz.tbi ${qcOut}/ 2>/dev/null || true
+                cp ${params.outdir}/qc/*_gene_coverage.tsv ${qcOut}/ 2>/dev/null || true
             fi
             if [ -d "${params.outdir}/pipeline_info" ]; then
                 cp ${params.outdir}/pipeline_info/trace.txt ${pipelineInfoOut}/ 2>/dev/null || true

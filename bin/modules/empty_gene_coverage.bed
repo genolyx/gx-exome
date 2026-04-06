@@ -1,0 +1,1 @@
+# No gene intervals — gene-level TSV is skipped when skip_gene_coverage_tsv is true or no BED is configured.
