@@ -11,6 +11,7 @@ Output columns match daemon-friendly names: gene, mean_coverage, pct_bases_10x, 
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from collections import defaultdict
@@ -19,9 +20,46 @@ from typing import Dict, List, Tuple
 
 Interval = Tuple[str, int, int]  # chrom, start, end (0-based half-open)
 
+_GENE_SYM = re.compile(r"^[A-Za-z][A-Za-z0-9-]{0,24}$")
+_SKIP_TOK_PREFIXES = (
+    "ENST",
+    "NM_",
+    "NR_",
+    "XM_",
+    "XR_",
+    "ENSG",
+    "CCDS",
+    "CLINID",
+    "LOC",
+)
+
+
+def _gene_keys_from_bed_col4(name: str) -> List[str]:
+    """
+    HGNC-like symbols in column 4. Twist/vendor BEDs use ``PAH;NM_...;ENST...``; plain BEDs use ``PAH``.
+    """
+    raw = (name or "").strip()
+    if not raw:
+        return []
+    keys: List[str] = []
+    for chunk in raw.replace(",", ";").replace("|", ";").split(";"):
+        t = chunk.strip()
+        if not t:
+            continue
+        ul = t.upper()
+        if any(ul.startswith(p) for p in _SKIP_TOK_PREFIXES):
+            continue
+        if _GENE_SYM.match(t):
+            keys.append(ul)
+    if keys:
+        return keys
+    if _GENE_SYM.match(raw):
+        return [raw.upper()]
+    return []
+
 
 def _parse_bed(path: str) -> Dict[str, List[Interval]]:
-    """Group intervals by column 4 (gene). Skips rows without a name."""
+    """Group intervals by HGNC symbol derived from column 4."""
     by_gene: Dict[str, List[Interval]] = defaultdict(list)
     with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -41,7 +79,8 @@ def _parse_bed(path: str) -> Dict[str, List[Interval]]:
                 continue
             if end_i <= start_i:
                 continue
-            by_gene[name].append((chrom, start_i, end_i))
+            for gkey in _gene_keys_from_bed_col4(name):
+                by_gene[gkey].append((chrom, start_i, end_i))
     return by_gene
 
 
