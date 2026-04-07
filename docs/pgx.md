@@ -80,6 +80,48 @@ SNP/indel-based star alleles (`*3`, `*4`, `*6`, `*9`, `*10`, `*17`, `*41`, etc.)
 | Work dir only: `aldy_cyp2d6_result.json` | Aldy result summary (schema `gx_exome_aldy_cyp2d6_v1`) |
 | Work dir only: `<sample>.CYP2D6.aldy` | Raw Aldy output with minor-allele decomposition |
 
+## Extended PGx panel (non-PharmCAT genes)
+
+PharmCAT covers 21 genes with CPIC/DPWG clinical guidelines. The pipeline extends coverage to **49 total genes** by genotyping curated pharmacogenomic variants directly from the annotated VCF.
+
+### How it works
+
+1. **`RUN_PGX_CUSTOM`** (`bin/modules/pgx_custom.nf`, label `pgx_custom`) runs on the VEP-annotated VCF.
+2. A curated reference file (`bin/modules/pgx_custom_variants.tsv`) defines ~40 key PGx SNPs across 30 additional genes.
+3. For each position, the script queries the VCF with `pysam`, extracts genotype and VEP annotation (rsID, consequence, SIFT/PolyPhen, ClinVar, gnomAD AF).
+4. Output: `pgx_custom_result.json` (per-variant detail) and `pgx_custom_summary.txt` (human-readable).
+
+### Additional genes covered
+
+| Category | Genes |
+|----------|-------|
+| Drug metabolism | CYP2C8, CYP2C18, CYP3A4, NAT2, COMT, CES1, BCHE, NQO1, UGT1A4, GSTP1 |
+| Drug transport | ABCB1 |
+| Receptor / target | OPRM1, DRD2, ANKK1, HTR1A, HTR2A, HTR2C, GRIK4 |
+| Thrombophilia | F2, F5, GGCX |
+| Folate / MTX | MTHFR |
+| Disease risk / lipids | APOE, KIF6, ACE |
+| DNA repair / chemo | ATM, ERCC1, XRCC1 |
+| Antiviral | IFNL4, ITPA |
+
+### Maintaining the variant list
+
+Edit `bin/modules/pgx_custom_variants.tsv` to add, remove, or update target variants. Each row defines: gene, rsID, chromosome, GRCh38 position, ref, alt, variant name, clinical significance. Changes take effect on next pipeline run.
+
+### Container
+
+| Item | Value |
+|------|-------|
+| Container | `python:3.12-bookworm` (shared with `pgx_finalize` / `aldy`) |
+| Runtime dependency | `pysam` (pip-installed at runtime) |
+
+### Output
+
+| Path (under `outdir`) | Description |
+|------------------------|-------------|
+| `pgx/pgx_custom_result.json` | Per-variant genotyping results (schema `gx_exome_pgx_custom_v1`) |
+| `pgx/pgx_custom_summary.txt` | Human-readable summary of variants detected vs. reference |
+
 ## Implementation notes
 
 - The pipeline uses **two PharmCAT processes** (`RUN_PGX_PHARMCAT` + `FINALIZE_PGX_JSON`) and one Aldy process (`RUN_ALDY_CYP2D6`).

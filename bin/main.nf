@@ -53,6 +53,8 @@ include { GENERATE_VISUAL_EVIDENCE } from './modules/visualize'
 include { PREPARE_VIZ_RESOURCES }   from './modules/resources'
 include { RUN_PGX_PHARMCAT; FINALIZE_PGX_JSON } from './modules/pgx'
 include { RUN_ALDY_CYP2D6 }                     from './modules/aldy'
+include { RUN_PGX_CUSTOM }                       from './modules/pgx_custom'
+include { GENERATE_PGX_PANEL_REPORT }             from './modules/pgx_report'
 
 // -------------------------------------------------------
 // Workflow
@@ -390,6 +392,19 @@ workflow {
             .combine(Channel.value(params.pgx_reference_genome))
             .combine(Channel.value(params.pgx_container))
         FINALIZE_PGX_JSON(pgx_finalize_in)
+
+        // Extended PGx panel — genotype curated variants in non-PharmCAT genes
+        pgx_custom_tsv = Channel.fromPath("${projectDir}/modules/pgx_custom_variants.tsv", checkIfExists: true)
+        pgx_custom_input = anno_pgx_base_ch
+            .combine(pgx_custom_tsv)
+        RUN_PGX_CUSTOM(pgx_custom_input)
+
+        // Combined PGx panel HTML report (PharmCAT + extended panel)
+        pgx_report_script = Channel.fromPath("${projectDir}/modules/pgx_panel_report.py", checkIfExists: true)
+        pgx_report_input = RUN_PGX_PHARMCAT.out.staged
+            .combine(RUN_PGX_CUSTOM.out.result_json)
+            .combine(pgx_report_script)
+        GENERATE_PGX_PANEL_REPORT(pgx_report_input)
     } else {
         annotated_vcf_ch
             .multiMap { item ->
