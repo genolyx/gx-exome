@@ -12,6 +12,9 @@ params.vep_cache_dir = "${projectDir}/../data/refs/vep_cache"
 params.skip_mosdepth_per_base = false
 params.skip_gene_coverage_tsv = false
 params.gene_coverage_bed = null
+params.skip_pgx = true
+params.pgx_reference_genome = 'GRCh38'
+params.pgx_container = 'pgkb/pharmcat:2.15.5'
 
 // -------------------------------------------------------
 // Module imports
@@ -48,6 +51,7 @@ include { CYP21_PARALOG_PILEUP }    from './modules/cyp21_paralog'
 include { CYP21_HOTSPOT_PILEUP }    from './modules/cyp21_hotspot_pileup'
 include { GENERATE_VISUAL_EVIDENCE } from './modules/visualize'
 include { PREPARE_VIZ_RESOURCES }   from './modules/resources'
+include { RUN_PGX_PHARMCAT }        from './modules/pgx'
 
 // -------------------------------------------------------
 // Workflow
@@ -78,6 +82,10 @@ workflow {
     println "  Variant Caller : ${params.variant_caller}"
     println "  VEP Annotation : ${params.skip_vep ? 'SKIPPED' : 'ENABLED'}"
     println "  MOSDEPTH per-base (qc/, daemon gene coverage): ${mosdepthPerBaseOn ? 'ENABLED' : 'SKIPPED (skip_mosdepth_per_base)'}"
+    def skipPgx = java.lang.Boolean.parseBoolean(
+        params.skip_pgx != null ? params.skip_pgx.toString() : 'true'
+    )
+    println "  PGx (PharmCAT → pgx/): ${skipPgx ? 'SKIPPED (skip_pgx)' : 'ENABLED'}"
     println "=" * 60
 
     // Channel for FASTQ pairs
@@ -352,11 +360,21 @@ workflow {
         annotated_vcf_ch = vcf_ch
     }
 
+    // Fan-out: PGx (optional), IGV snapshots, and summary each need a copy of the annotated/filtered VCF channel
+    if (!skipPgx && params.backbone_bed) {
+        annotated_vcf_ch.into { anno_viz_ch; anno_pgx_base_ch; anno_sum_ch }
+        pgx_py = Channel.fromPath("${projectDir}/modules/pgx_finalize.py", checkIfExists: true)
+        pgx_in = anno_pgx_base_ch.combine(pgx_py)
+        RUN_PGX_PHARMCAT(pgx_in, Channel.value(params.pgx_reference_genome))
+    } else {
+        annotated_vcf_ch.into { anno_viz_ch; anno_sum_ch }
+    }
+
     // -------------------------------------------------------
     // 1b. Visual Evidence (IGV Snapshots)
     // -------------------------------------------------------
     eh_json_ch = EXPANSION_HUNTER.out.results.map { sid, json, vcf -> tuple(sid, json) }
-    viz_input    = bam_ch.join(annotated_vcf_ch, remainder: true)
+    viz_input    = bam_ch.join(anno_viz_ch, remainder: true)
         .join(EXPANSION_HUNTER.out.eh_realigned, by: 0)
         .join(eh_json_ch, by: 0)
         .join(SMN_UNIFIED_C840_BAM.out.unified, by: 0)
@@ -379,7 +397,7 @@ workflow {
     gcnv_vcf_ch  = params.skip_cnv ? Channel.value([]) : POSTPROCESS_GCNV.out.vcf.map { it[1] }.collect()
 
     // Per-sample annotated (VEP) or filtered VCFs + tabix index — pysam.fetch() in summary requires .tbi staged beside .vcf.gz
-    annotated_vcf_for_summary = params.backbone_bed ? annotated_vcf_ch.flatMap { [it[1], it[2]] }.collect() : Channel.value([])
+    annotated_vcf_for_summary = params.backbone_bed ? anno_sum_ch.flatMap { [it[1], it[2]] }.collect() : Channel.value([])
 
     GENERATE_SUMMARY_REPORT(
         manta_vcf_ch,
@@ -438,6 +456,7 @@ workflow.onComplete {
             def repeatOut      = file("${params.output_dir}/repeat")
             def pseudogeneOut  = file("${params.output_dir}/pseudogene")
             def qcOut          = file("${params.output_dir}/qc")
+            def pgxOut         = file("${params.output_dir}/pgx")
             def pipelineInfoOut = file("${params.output_dir}/pipeline_info")
 
             summaryOut.mkdirs()
@@ -448,6 +467,7 @@ workflow.onComplete {
             repeatOut.mkdirs()
             pseudogeneOut.mkdirs()
             qcOut.mkdirs()
+            pgxOut.mkdirs()
             pipelineInfoOut.mkdirs()
 
             def copyScript = """
@@ -494,6 +514,9 @@ workflow.onComplete {
                 cp ${params.outdir}/qc/*.mosdepth.per-base.bed.gz ${qcOut}/ 2>/dev/null || true
                 cp ${params.outdir}/qc/*.mosdepth.per-base.bed.gz.tbi ${qcOut}/ 2>/dev/null || true
                 cp ${params.outdir}/qc/*_gene_coverage.tsv ${qcOut}/ 2>/dev/null || true
+            fi
+            if [ -d "${params.outdir}/pgx" ]; then
+                cp -r ${params.outdir}/pgx/* ${pgxOut}/ 2>/dev/null || true
             fi
             if [ -d "${params.outdir}/pipeline_info" ]; then
                 cp ${params.outdir}/pipeline_info/trace.txt ${pipelineInfoOut}/ 2>/dev/null || true

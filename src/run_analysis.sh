@@ -29,6 +29,7 @@ Options:
     --aligner ALIGNER          Aligner to use: bwa-mem or bwa-mem2 (default)
     --variant-caller CALLER    Variant caller: gatk, deepvariant (default), or strelka2
     --skip-vep                 Skip VEP annotation (use legacy snpEff mode)
+    --enable-pgx               Run PharmCAT PGx (writes analysis_dir/pgx/ and output_dir/pgx/); default off
     --shared-ref-dir DIR       Shared reference root (default: /data/reference)
     --fresh                    Delete sample work/ and .nextflow cache, then run (no -resume)
     --panel PANEL              Exome capture panel name (default: twist-exome2)
@@ -78,6 +79,7 @@ SKIP_CNV=""
 ALIGNER="bwa-mem2"
 VARIANT_CALLER="deepvariant"
 SKIP_VEP="true"
+SKIP_PGX="true"
 SHARED_REF_DIR="/data/reference"
 FRESH=""
 PANEL="twist-exome2"
@@ -126,6 +128,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-skip-vep)
             SKIP_VEP="false"
+            shift
+            ;;
+        --enable-pgx)
+            SKIP_PGX="false"
             shift
             ;;
         --shared-ref-dir)
@@ -367,6 +373,7 @@ echo "  Skip CNV: $([ -n "$SKIP_CNV" ] && echo "enabled" || echo "disabled")"
 echo "  Aligner: ${ALIGNER}"
 echo "  Variant Caller: ${VARIANT_CALLER}"
 echo "  VEP Annotation: $([ "$SKIP_VEP" = "true" ] && echo "disabled (snpEff)" || echo "enabled")"
+echo "  PGx (PharmCAT): $([ "$SKIP_PGX" = "true" ] && echo "disabled" || echo "enabled")"
 echo "  Shared Ref Dir: ${SHARED_REF_DIR}"
 echo "  Fresh run: $([ -n "$FRESH" ] && echo "yes (work + .nextflow cleared, no -resume)" || echo "no")"
 echo "  Panel: ${PANEL}"
@@ -485,6 +492,7 @@ docker run --rm -t --name "$NF_DOCKER_NAME" \
             --aligner ${ALIGNER} \
             --variant_caller ${VARIANT_CALLER} \
             --skip_vep ${SKIP_VEP} \
+            --skip_pgx ${SKIP_PGX} \
             ${SKIP_CNV} \
             --outdir ${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME} \
             --output_dir ${DATA_DIR}/output/${WORK_DIR}/${SAMPLE_NAME} \
