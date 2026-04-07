@@ -12,7 +12,7 @@ params.vep_cache_dir = "${projectDir}/../data/refs/vep_cache"
 params.skip_mosdepth_per_base = false
 params.skip_gene_coverage_tsv = false
 params.gene_coverage_bed = null
-params.skip_pgx = true
+params.skip_pgx = false
 params.pgx_reference_genome = 'GRCh38'
 params.pgx_container = 'pgkb/pharmcat:2.15.5'
 
@@ -51,7 +51,8 @@ include { CYP21_PARALOG_PILEUP }    from './modules/cyp21_paralog'
 include { CYP21_HOTSPOT_PILEUP }    from './modules/cyp21_hotspot_pileup'
 include { GENERATE_VISUAL_EVIDENCE } from './modules/visualize'
 include { PREPARE_VIZ_RESOURCES }   from './modules/resources'
-include { RUN_PGX_PHARMCAT }        from './modules/pgx'
+include { RUN_PGX_PHARMCAT; FINALIZE_PGX_JSON } from './modules/pgx'
+include { RUN_ALDY_CYP2D6 }                     from './modules/aldy'
 
 // -------------------------------------------------------
 // Workflow
@@ -83,9 +84,9 @@ workflow {
     println "  VEP Annotation : ${params.skip_vep ? 'SKIPPED' : 'ENABLED'}"
     println "  MOSDEPTH per-base (qc/, daemon gene coverage): ${mosdepthPerBaseOn ? 'ENABLED' : 'SKIPPED (skip_mosdepth_per_base)'}"
     def skipPgx = java.lang.Boolean.parseBoolean(
-        params.skip_pgx != null ? params.skip_pgx.toString() : 'true'
+        params.skip_pgx != null ? params.skip_pgx.toString() : 'false'
     )
-    println "  PGx (PharmCAT → pgx/): ${skipPgx ? 'SKIPPED (skip_pgx)' : 'ENABLED'}"
+    println "  PGx (PharmCAT → pgx/): ${skipPgx ? 'SKIPPED (skip_pgx)' : 'ENABLED (default)'}"
     println "=" * 60
 
     // Channel for FASTQ pairs
@@ -360,14 +361,44 @@ workflow {
         annotated_vcf_ch = vcf_ch
     }
 
-    // Fan-out: PGx (optional), IGV snapshots, and summary each need a copy of the annotated/filtered VCF channel
+    // Fan-out: PGx (unless skip_pgx), IGV snapshots, and summary each need a copy of the annotated/filtered VCF channel.
+    // Nextflow 25+ removed Channel.into — use multiMap (operator reference).
     if (!skipPgx && params.backbone_bed) {
-        annotated_vcf_ch.into { anno_viz_ch; anno_pgx_base_ch; anno_sum_ch }
+        annotated_vcf_ch
+            .multiMap { item ->
+                viz: item
+                pgx: item
+                sum: item
+            }
+            .set { anno_mm }
+        anno_viz_ch = anno_mm.viz
+        anno_pgx_base_ch = anno_mm.pgx
+        anno_sum_ch = anno_mm.sum
         pgx_py = Channel.fromPath("${projectDir}/modules/pgx_finalize.py", checkIfExists: true)
-        pgx_in = anno_pgx_base_ch.combine(pgx_py)
-        RUN_PGX_PHARMCAT(pgx_in, Channel.value(params.pgx_reference_genome))
+
+        // Aldy CYP2D6 — runs on BAM in parallel with variant calling / VEP;
+        // produces outside-call TSV for PharmCAT's -po flag.
+        RUN_ALDY_CYP2D6(bam_ch)
+
+        // Join annotated VCF (sample_id, vcf, tbi) with Aldy outside call (sample_id, tsv)
+        pgx_input = anno_pgx_base_ch
+            .join(RUN_ALDY_CYP2D6.out.outside_call, by: 0)
+
+        RUN_PGX_PHARMCAT(pgx_input)
+        pgx_finalize_in = RUN_PGX_PHARMCAT.out.staged
+            .combine(pgx_py)
+            .combine(Channel.value(params.pgx_reference_genome))
+            .combine(Channel.value(params.pgx_container))
+        FINALIZE_PGX_JSON(pgx_finalize_in)
     } else {
-        annotated_vcf_ch.into { anno_viz_ch; anno_sum_ch }
+        annotated_vcf_ch
+            .multiMap { item ->
+                viz: item
+                sum: item
+            }
+            .set { anno_mm2 }
+        anno_viz_ch = anno_mm2.viz
+        anno_sum_ch = anno_mm2.sum
     }
 
     // -------------------------------------------------------
@@ -564,4 +595,14 @@ MARKER
         }
         println "-" * 60 + "\n"
     }
+
+    println ""
+    println "=" * 60
+    if (workflow.success) {
+        println "GX-EXOME: PIPELINE COMPLETE — all processes finished successfully."
+    } else {
+        println "GX-EXOME: PIPELINE FAILED — see nextflow.log and work/*/ for task errors."
+    }
+    println "=" * 60
+    println ""
 }

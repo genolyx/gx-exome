@@ -32,7 +32,7 @@ Nextflow 기반 GX-Exome 분석 파이프라인입니다. WES(Whole Exome Sequen
 | Repeat | `repeat.nf` | ExpansionHunter (FMR1 등) | EH VCF, JSON, SVG |
 | Pseudogene | `pseudogene.nf` | Paraphase (SMN1/2, GBA), SMAca | JSON, TXT |
 
-추가적으로 `coverage.nf`에서 QC 메트릭을, `visualize.nf`에서 IGV 스냅샷을, `summary.nf`에서 통합 리포트를 생성합니다. 선택적으로 **PharmCAT** 기반 PGx 결과를 `pgx/`에 둡니다(기본 비활성화, `docs/pgx.md` 참고).
+추가적으로 `coverage.nf`에서 QC 메트릭을, `visualize.nf`에서 IGV 스냅샷을, `summary.nf`에서 통합 리포트를 생성합니다. **PharmCAT** 기반 PGx 결과는 기본적으로 매 exome 실행마다 `pgx/`에 기록됩니다(`--skip_pgx`로 끌 수 있음, `docs/pgx.md` 참고).
 
 ## Output Directory Structure
 
@@ -48,7 +48,7 @@ output_dir/
 ├── summary/                # Summary & detailed reports (TXT)
 ├── snapshots/              # IGV snapshots (HTML)
 ├── qc/                     # QC metrics, coverage, duplicate metrics
-├── pgx/                    # Optional PharmCAT PGx (pgx_meta.json, pgx_result.json; see docs/pgx.md)
+├── pgx/                    # PharmCAT PGx (default each run; pgx_meta.json, pgx_result.json; docs/pgx.md)
 ├── pipeline_info/          # Nextflow trace, timeline, report
 └── pipeline_complete.json  # Completion marker (for service-daemon)
 ```

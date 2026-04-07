@@ -29,7 +29,7 @@ Options:
     --aligner ALIGNER          Aligner to use: bwa-mem or bwa-mem2 (default)
     --variant-caller CALLER    Variant caller: gatk, deepvariant (default), or strelka2
     --skip-vep                 Skip VEP annotation (use legacy snpEff mode)
-    --enable-pgx               Run PharmCAT PGx (writes analysis_dir/pgx/ and output_dir/pgx/); default off
+    --skip-pgx                 Skip PharmCAT PGx (default: PGx runs every exome run)
     --shared-ref-dir DIR       Shared reference root (default: /data/reference)
     --fresh                    Delete sample work/ and .nextflow cache, then run (no -resume)
     --panel PANEL              Exome capture panel name (default: twist-exome2)
@@ -79,7 +79,7 @@ SKIP_CNV=""
 ALIGNER="bwa-mem2"
 VARIANT_CALLER="deepvariant"
 SKIP_VEP="true"
-SKIP_PGX="true"
+SKIP_PGX="false"
 SHARED_REF_DIR="/data/reference"
 FRESH=""
 PANEL="twist-exome2"
@@ -130,8 +130,8 @@ while [[ $# -gt 0 ]]; do
             SKIP_VEP="false"
             shift
             ;;
-        --enable-pgx)
-            SKIP_PGX="false"
+        --skip-pgx)
+            SKIP_PGX="true"
             shift
             ;;
         --shared-ref-dir)
@@ -283,8 +283,8 @@ repair_order_tree_permissions() {
     [ "$any" -eq 1 ] || return 0
 
     if command -v docker >/dev/null 2>&1 && id -nG | grep -qw docker && docker info &>/dev/null; then
+        # No --name: fixed names collide if a previous helper container did not exit/remove (stuck run, kill -9, etc.)
         if docker run --rm --platform linux/amd64 \
-            --name "gx-exome-perm-${WORK_DIR}" \
             -e WORK_DIR="$WORK_DIR" \
             -e CHOWN_SPEC="$CHOWN_SPEC" \
             -v "${DATA_DIR}/analysis:/fa" \
@@ -339,7 +339,6 @@ ensure_sample_output_dirs() {
     fi
     echo -e "${YELLOW}Creating output dirs via docker (host mkdir failed, e.g. parent dir owned by root)...${NC}"
     docker run --rm --platform linux/amd64 \
-        --name "gx-exome-mkdir-${WORK_DIR}" \
         -e WORK_DIR="$WORK_DIR" \
         -e SAMPLE_NAME="$SAMPLE_NAME" \
         -e CHOWN_SPEC="$CHOWN_SPEC" \
@@ -409,7 +408,7 @@ fi
 NXF_PROFILE="-profile docker"
 
 # Docker 이미지 확인
-if ! docker images | grep -q "gx-exome"; then
+if [ -z "$(docker images -q gx-exome 2>/dev/null)" ]; then
     echo -e "${RED}Error: Docker image 'gx-exome' not found${NC}"
     echo "Please build the image first:"
     echo "  docker-compose -f docker/docker-compose.yml build"
@@ -471,6 +470,9 @@ docker run --rm -t --name "$NF_DOCKER_NAME" \
     -e NXF_DATA_DIR="${DATA_DIR}" \
     -e NXF_DOCKER_TASK_USER="${CHOWN_SPEC}" \
     -e HOST_WORK_DIR="${HOST_WORK_DIR}" \
+    -e NXF_ANSI_LOG=false \
+    -e NXF_ANSI_SUMMARY=false \
+    -e NO_COLOR=1 \
     gx-exome:latest \
     bash -c "
         cd ${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME} && \

@@ -293,6 +293,7 @@ def start_pipeline():
             
             cmd = [
                 'nextflow', 'run', '/app/bin/main.nf',
+                '-ansi-log', 'false',
                 '--fastq_dir', fastq_path,
                 '--outdir', analysis_dir,
                 '--output_dir', output_dir,
@@ -303,7 +304,12 @@ def start_pipeline():
                 '-with-trace', os.path.join(log_dir, 'trace.txt'),
                 '-with-timeline', os.path.join(log_dir, 'timeline.html')
             ]
-            
+            # Plain logs: one Submitted/Completed line per task; avoid NF 25 live progress table spam in files
+            run_env = os.environ.copy()
+            run_env['NXF_ANSI_LOG'] = 'false'
+            run_env['NXF_ANSI_SUMMARY'] = 'false'
+            run_env.setdefault('NO_COLOR', '1')
+
             try:
                 # analysis.log에 모든 출력 저장
                 with open(analysis_log, 'w') as f_analysis:
@@ -312,6 +318,7 @@ def start_pipeline():
                         pipeline_process = subprocess.Popen(
                         cmd,
                         cwd='/app/bin',
+                        env=run_env,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
                         text=True,
