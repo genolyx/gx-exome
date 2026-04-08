@@ -24,26 +24,23 @@ process GENERATE_SUMMARY_REPORT {
 
     script:
     """
-    # --- Dependency Setup ---
     export TMPDIR=\$PWD
-    export PATH=\$PWD:\$PATH
-    
-    # Use SHARED cache for packages (speed up)
-    export CONDA_PKGS_DIRS=\$PWD/.cache/micromamba_pkgs
-    export MAMBA_ROOT_PREFIX=\$PWD/micromamba
 
-    mkdir -p \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX
-    wget -q --no-check-certificate https://curl.se/ca/cacert.pem || true
-    export SSL_CERT_FILE=\$PWD/cacert.pem
-    export MAMBA_SSL_VERIFY=false
-
-    if [ ! -f "micromamba_bin" ]; then
-        wget -qO micromamba_bin https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-linux-64 \
-            && chmod +x micromamba_bin || true
+    if ! python3 -c "import pysam; import pandas" 2>/dev/null; then
+        export PATH=\$PWD:\$PATH
+        export CONDA_PKGS_DIRS=\$PWD/.cache/micromamba_pkgs
+        export MAMBA_ROOT_PREFIX=\$PWD/micromamba
+        mkdir -p \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX
+        wget -q --no-check-certificate https://curl.se/ca/cacert.pem
+        export SSL_CERT_FILE=\$PWD/cacert.pem
+        export MAMBA_SSL_VERIFY=false
+        if [ ! -f "micromamba_bin" ]; then
+            wget -qO micromamba_bin https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-linux-64 \
+                && chmod +x micromamba_bin
+        fi
+        [ -f micromamba_bin ] && ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge python=3.9 pysam pandas -y
+        export PATH=\$PWD/env/bin:\$PATH
     fi
-    
-    [ -f micromamba_bin ] && ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge python=3.9 pysam pandas -y || true
-    export PATH=\$PWD/env/bin:\$PATH
 
     # --- Python Summary Script ---
     cat <<EOF > summarize.py

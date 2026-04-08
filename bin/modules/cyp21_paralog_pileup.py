@@ -31,11 +31,8 @@ def pick_chr6(bam: pysam.AlignmentFile) -> str | None:
     return None
 
 
-def normalize_contig(bam_path: str, chrom: str) -> str | None:
+def normalize_contig(refs: set[str], chrom: str) -> str | None:
     """Map chr6/6 to whichever exists in the BAM header."""
-    bam = pysam.AlignmentFile(bam_path, "rb")
-    refs = set(bam.references)
-    bam.close()
     if chrom in refs:
         return chrom
     if chrom == "chr6" and "6" in refs:
@@ -64,14 +61,13 @@ def base_in_hgvs_coding_space(ref_forward_base: str, minus_strand_gene: bool) ->
 
 
 def pileup_acgt_at_1bp(
-    bam_path: str,
+    bam: pysam.AlignmentFile,
     chrom: str,
     pos_1based: int,
     *,
     hgvs_coding_minus_strand: bool = False,
 ):
     """Count A/C/G/T/N at one reference position (1-based). Same semantics as SMN pileup."""
-    bam = pysam.AlignmentFile(bam_path, "rb")
     start0 = pos_1based - 1
     end0 = pos_1based
     counts = {"A": 0, "C": 0, "G": 0, "T": 0, "N": 0}
@@ -98,10 +94,9 @@ def pileup_acgt_at_1bp(
                     counts[b] += 1
                 else:
                     counts["N"] += 1
-    except Exception:
-        bam.close()
+    except (ValueError, OSError) as e:
+        print(f"WARNING: pileup failed at {chrom}:{pos_1based}: {e}", file=sys.stderr)
         return None
-    bam.close()
     return counts
 
 
@@ -185,9 +180,10 @@ def main() -> None:
     args = ap.parse_args()
 
     bam = pysam.AlignmentFile(args.bam, "rb")
+    bam_refs = set(bam.references)
     default_chrom = pick_chr6(bam)
-    bam.close()
     if not default_chrom:
+        bam.close()
         print("BAM has no chr6 or 6 contig.", file=sys.stderr)
         sys.exit(1)
 
@@ -234,16 +230,16 @@ def main() -> None:
                 chrom = (row.get("cyp21a2_chr") or row.get("cyp21a1p_chr") or "").strip()
                 if not chrom:
                     chrom = default_chrom
-                chrom = normalize_contig(args.bam, chrom) or default_chrom
+                chrom = normalize_contig(bam_refs, chrom) or default_chrom
 
                 c1 = pileup_acgt_at_1bp(
-                    args.bam,
+                    bam,
                     chrom,
                     p1,
                     hgvs_coding_minus_strand=args.hgvs_minus_strand,
                 )
                 c2 = pileup_acgt_at_1bp(
-                    args.bam,
+                    bam,
                     chrom,
                     p2,
                     hgvs_coding_minus_strand=args.hgvs_minus_strand,
@@ -378,6 +374,7 @@ def main() -> None:
             cn_summary_for_file = None
 
     finally:
+        bam.close()
         if args.output:
             out.close()
         if not args.no_cn_summary and cn_summary_for_file is not None:

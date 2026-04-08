@@ -17,34 +17,33 @@ process FALLBACK_ANALYSIS {
 
     script:
     """
-    # --- Dependency Setup (Micromamba; NXF_DOCKER_TASK_USER 시 HOME 없으면 /.conda 오류)
     export TMPDIR=\$PWD
     export HOME=\$PWD
-    export PIP_CACHE_DIR=\$PWD/.cache/pip
-    export XDG_CACHE_HOME=\$PWD/.cache/xdg
-    export PATH=\$PWD:\$PATH
-    export CONDA_PKGS_DIRS=\$PWD/.cache/micromamba_pkgs
-    export MAMBA_ROOT_PREFIX=\$PWD/micromamba
-    
-    mkdir -p \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX \$PIP_CACHE_DIR \$XDG_CACHE_HOME
 
-    wget -q --no-check-certificate https://curl.se/ca/cacert.pem || true
-    export SSL_CERT_FILE=\$PWD/cacert.pem
-    export MAMBA_SSL_VERIFY=false
-
-    if [ ! -f "micromamba_bin" ]; then
-        wget -qO micromamba_bin https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-linux-64 \
-            && chmod +x micromamba_bin || true
+    if ! command -v samtools >/dev/null 2>&1 || ! command -v freebayes >/dev/null 2>&1; then
+        export PIP_CACHE_DIR=\$PWD/.cache/pip
+        export XDG_CACHE_HOME=\$PWD/.cache/xdg
+        export PATH=\$PWD:\$PATH
+        export CONDA_PKGS_DIRS=\$PWD/.cache/micromamba_pkgs
+        export MAMBA_ROOT_PREFIX=\$PWD/micromamba
+        mkdir -p \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX \$PIP_CACHE_DIR \$XDG_CACHE_HOME
+        wget -q --no-check-certificate https://curl.se/ca/cacert.pem
+        export SSL_CERT_FILE=\$PWD/cacert.pem
+        export MAMBA_SSL_VERIFY=false
+        if [ ! -f "micromamba_bin" ]; then
+            wget -qO micromamba_bin https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-linux-64 \
+                && chmod +x micromamba_bin
+        fi
+        if [ -f micromamba_bin ] && [ ! -x ./env/bin/samtools ]; then
+            ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge samtools=1.16.1 freebayes=1.3.6 -y
+        fi
+        [ -x ./env/bin/samtools ] && [ -x ./env/bin/freebayes ] || { echo "ERROR: samtools/freebayes env missing"; exit 1; }
+        export PATH=\$PWD/env/bin:\$PATH
     fi
-    
-    if [ -f micromamba_bin ] && [ ! -x ./env/bin/samtools ]; then
-        ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge samtools=1.16.1 freebayes=1.3.6 -y
-    fi
-    [ -x ./env/bin/samtools ] && [ -x ./env/bin/freebayes ] && [ -x ./env/bin/python ] || { echo "ERROR: samtools/freebayes/python env missing"; exit 1; }
 
-    ST=\$PWD/env/bin/samtools
-    FB=\$PWD/env/bin/freebayes
-    PY=\$PWD/env/bin/python
+    ST=\$(command -v samtools)
+    FB=\$(command -v freebayes)
+    PY=\$(command -v python3 || command -v python)
     
     # --- HBA Analysis ---
     

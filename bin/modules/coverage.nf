@@ -16,33 +16,32 @@ process DEPTH_ANALYSIS {
 
     script:
     """
-    # --- Micromamba (paraphase 컨테이너 + NXF_DOCKER_TASK_USER → HOME 필수)
     export TMPDIR=\$PWD
     export HOME=\$PWD
-    export PIP_CACHE_DIR=\$PWD/.cache/pip
-    export XDG_CACHE_HOME=\$PWD/.cache/xdg
-    export PATH=\$PWD:\$PATH
-    export CONDA_PKGS_DIRS=\$PWD/.cache/micromamba_pkgs
-    export MAMBA_ROOT_PREFIX=\$PWD/micromamba
-    
-    mkdir -p \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX \$PIP_CACHE_DIR \$XDG_CACHE_HOME
 
-    wget -q --no-check-certificate https://curl.se/ca/cacert.pem || true
-    export SSL_CERT_FILE=\$PWD/cacert.pem
-    export MAMBA_SSL_VERIFY=false
-
-    if [ ! -f "micromamba_bin" ]; then
-        wget -qO micromamba_bin https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-linux-64 \
-            && chmod +x micromamba_bin || true
+    if ! command -v samtools >/dev/null 2>&1 || ! command -v mosdepth >/dev/null 2>&1; then
+        export PIP_CACHE_DIR=\$PWD/.cache/pip
+        export XDG_CACHE_HOME=\$PWD/.cache/xdg
+        export PATH=\$PWD:\$PATH
+        export CONDA_PKGS_DIRS=\$PWD/.cache/micromamba_pkgs
+        export MAMBA_ROOT_PREFIX=\$PWD/micromamba
+        mkdir -p \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX \$PIP_CACHE_DIR \$XDG_CACHE_HOME
+        wget -q --no-check-certificate https://curl.se/ca/cacert.pem
+        export SSL_CERT_FILE=\$PWD/cacert.pem
+        export MAMBA_SSL_VERIFY=false
+        if [ ! -f "micromamba_bin" ]; then
+            wget -qO micromamba_bin https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-linux-64 \
+                && chmod +x micromamba_bin
+        fi
+        if [ -f micromamba_bin ] && [ ! -x ./env/bin/samtools ]; then
+            ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge samtools=1.16.1 mosdepth=0.3.3 -y
+        fi
+        [ -x ./env/bin/samtools ] && [ -x ./env/bin/mosdepth ] || { echo "ERROR: samtools/mosdepth env missing"; exit 1; }
+        export PATH=\$PWD/env/bin:\$PATH
     fi
-    
-    if [ -f micromamba_bin ] && [ ! -x ./env/bin/samtools ]; then
-        ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge samtools=1.16.1 mosdepth=0.3.3 -y
-    fi
-    [ -x ./env/bin/samtools ] && [ -x ./env/bin/mosdepth ] || { echo "ERROR: samtools/mosdepth env missing"; exit 1; }
 
-    ST=\$PWD/env/bin/samtools
-    MD=\$PWD/env/bin/mosdepth
+    ST=\$(command -v samtools)
+    MD=\$(command -v mosdepth)
     
     # --- Analysis ---
 
@@ -73,10 +72,40 @@ process DEPTH_ANALYSIS {
     # --- 4. Intron Depth Verification (Merged) ---
     echo "Region\\tMean_Depth\\tMax_Depth\\tPercent_Covered" > ${sample_id}_intron_depth.txt
     
-    while read -r chrom start end name; do
-        \$ST depth -r "\$chrom:\$start-\$end" -a ${bam} | \\
-        awk -v name="\$name" '{sum+=\$3; if(\$3>0) covered++; if(\$3>max) max=\$3; count++} END {if (count>0) print name "\t" sum/count "\t" max "\t" (covered/count)*100; else print name "\t0\t0\t0"}' >> ${sample_id}_intron_depth.txt
-    done < ${dark_genes_bed}
+    \$ST depth -a -b ${dark_genes_bed} ${bam} | \\
+    awk -F'\\t' -v bed="${dark_genes_bed}" '
+        BEGIN {
+            while ((getline line < bed) > 0) {
+                split(line, f, "\\t")
+                key = f[1] ":" f[2] "-" f[3]
+                name[key] = f[4]
+                order[++n] = key
+            }
+        }
+        {
+            key = \$1 ":" (NR > 0 ? "" : "")
+            region = \$1 ":" \$2
+            for (k in name) {
+                split(k, rf, /[:-]/)
+                if (\$1 == rf[1] && \$2 >= rf[2]+1 && \$2 <= rf[3]) {
+                    sum[k] += \$3
+                    count[k]++
+                    if (\$3 > 0) covered[k]++
+                    if (\$3 > max[k]) max[k] = \$3
+                    break
+                }
+            }
+        }
+        END {
+            for (i = 1; i <= n; i++) {
+                k = order[i]
+                if (count[k] > 0)
+                    printf "%s\\t%.2f\\t%d\\t%.2f\\n", name[k], sum[k]/count[k], max[k], (covered[k]/count[k])*100
+                else
+                    printf "%s\\t0\\t0\\t0\\n", name[k]
+            }
+        }
+    ' >> ${sample_id}_intron_depth.txt
 
     # Same windows as HBA1_HBA2_Region + SMN1_SMN2_Region rows above (dark_genes_plus.bed) — mean depth, not a separate hardcoded locus/median.
     echo "\\n[Dark-gene SMA / HBA depth QC]" >> ${sample_id}_intron_depth.txt

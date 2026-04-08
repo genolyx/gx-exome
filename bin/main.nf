@@ -1,8 +1,6 @@
 nextflow.enable.dsl=2
 
-// Set defaults to avoid warnings
-params.hba_bed = null
-params.cyp21a2_bed = null
+// Set defaults to avoid warnings (hba_bed, cyp21a2_bed defaults are in nextflow.config)
 params.cleanup = false
 params.output_dir = null
 params.sample_name = null
@@ -244,12 +242,16 @@ workflow {
     MANTA_SV(bam_ch, ref_fasta, ref_fai)
 
     // 2b. Target Coverage & Intron Verification
+    intron_report_ch = Channel.value([])
     if (params.backbone_bed) {
         dark_genes_plus = file(params.dark_genes_plus_bed)
         DEPTH_ANALYSIS(bam_ch, file(params.backbone_bed), dark_genes_plus)
+        intron_report_ch = DEPTH_ANALYSIS.out.intron_report.collect()
     }
 
     // 2c. Fallback Analysis (HBA / CYP21A2)
+    hba_report_ch = Channel.value([])
+    cyp21a2_report_ch = Channel.value([])
     if (params.backbone_bed) {
         FALLBACK_ANALYSIS(
             bam_ch,
@@ -259,6 +261,8 @@ workflow {
             ref_fasta,
             ref_fai
         )
+        hba_report_ch = FALLBACK_ANALYSIS.out.hba_report.collect()
+        cyp21a2_report_ch = FALLBACK_ANALYSIS.out.cyp21a2_report.collect()
     }
 
     hba_paralog_py = Channel.fromPath("${projectDir}/modules/hba_paralog_pileup.py", checkIfExists: true)
@@ -420,7 +424,7 @@ workflow {
     // 1b. Visual Evidence (IGV Snapshots)
     // -------------------------------------------------------
     eh_json_ch = EXPANSION_HUNTER.out.results.map { sid, json, vcf -> tuple(sid, json) }
-    viz_input    = bam_ch.join(anno_viz_ch, remainder: true)
+    viz_input    = bam_ch.join(anno_viz_ch)
         .join(EXPANSION_HUNTER.out.eh_realigned, by: 0)
         .join(eh_json_ch, by: 0)
         .join(SMN_UNIFIED_C840_BAM.out.unified, by: 0)
@@ -449,13 +453,13 @@ workflow {
         manta_vcf_ch,
         gcnv_vcf_ch,
         PARAPHASE_RESCUE.out.json.collect(),
-        FALLBACK_ANALYSIS.out.hba_report.collect(),
-        FALLBACK_ANALYSIS.out.cyp21a2_report.collect(),
+        hba_report_ch,
+        cyp21a2_report_ch,
         EXPANSION_HUNTER.out.results.map { it[2] }.collect(),
         SMACA_RUN.out.txt.map { it[1] }.collect(),
-        DEPTH_ANALYSIS.out.intron_report.collect(),
+        intron_report_ch,
         GENERATE_VISUAL_EVIDENCE.out.snapshots.collect(),
-        file(params.backbone_bed),
+        params.backbone_bed ? file(params.backbone_bed) : file("NO_BED"),
         HBA_PARALOG_PILEUP.out.tsv.collect(),
         CYP21_PARALOG_PILEUP.out.tsv.collect(),
         CYP21_HOTSPOT_PILEUP.out.tsv.collect(),

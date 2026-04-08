@@ -170,8 +170,8 @@ class AnalysisMonitor:
             try:
                 with open(self.state_file, 'r') as f:
                     return json.load(f)
-            except:
-                pass
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"WARNING: state file read error: {e}", file=sys.stderr)
         return {'orders': {}}
     
     def save_state(self):
@@ -260,8 +260,8 @@ class AnalysisMonitor:
                     pct = STAGES.get(process_name, 0)
                     if pct > progress:
                         progress = pct
-        except:
-            pass
+        except (IOError, OSError, ValueError) as e:
+            print(f"WARNING: trace parse error: {e}", file=sys.stderr)
         
         return progress
     
@@ -405,8 +405,8 @@ class AnalysisMonitor:
                 match = re.search(r'Duration\s*:\s*(.+)', content)
                 if match:
                     return match.group(1).strip()
-        except:
-            pass
+        except (IOError, OSError) as e:
+            print(f"WARNING: log parse error: {e}", file=sys.stderr)
         
         return "Unknown"
     

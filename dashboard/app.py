@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 import threading
 import time
 import shutil
@@ -386,10 +387,10 @@ def stop_pipeline():
                         for child in proc.children(recursive=True):
                             child.kill()
                         proc.kill()
-            except:
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 pass
-    except:
-        pass
+    except Exception as e:
+        print(f"WARNING: stop_pipeline error: {e}", file=sys.stderr)
     
     current_analysis = {}
     return jsonify({'message': 'Pipeline stopped.', 'status': 'IDLE'})
@@ -417,8 +418,8 @@ def status():
                         state = "SUCCESS"
                     elif "ERROR" in last_lines:
                          state = "FAILED"
-            except: 
-                pass
+            except (IOError, OSError) as e:
+                print(f"WARNING: log read error: {e}", file=sys.stderr)
 
     details = "Waiting..."
     samples_progress = []
@@ -460,8 +461,8 @@ def status():
                         pct = STAGES.get(process_name, 0)
                         if pct > progress:
                             progress = pct
-            except:
-                pass
+            except (IOError, OSError, ValueError) as e:
+                print(f"WARNING: trace parse error: {e}", file=sys.stderr)
             
             if state == 'SUCCESS':
                 progress = 100
@@ -612,9 +613,6 @@ def health():
     """Health check endpoint."""
     return jsonify({'status': 'healthy', 'service': 'dashboard'})
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
-
 @app.route('/api/results')
 def api_results():
     """API endpoint to list all results grouped by sample."""
@@ -650,7 +648,7 @@ def api_results():
                             filepath = os.path.join(root, filename)
                             try:
                                 filesize = os.path.getsize(filepath)
-                            except:
+                            except OSError:
                                 filesize = 0
                             
                             rel_path = os.path.relpath(filepath, sample_path)
@@ -695,3 +693,6 @@ def api_results():
                         results_by_sample[sample_key]['categories'][category] = files_in_category
     
     return jsonify(results_by_sample)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)

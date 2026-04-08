@@ -28,17 +28,17 @@ process PREPROCESS_INTERVALS {
     mkdir -p \$MAMBA_ROOT_PREFIX
 
     # SSL Fix
-    wget -q --no-check-certificate https://curl.se/ca/cacert.pem || true
+    wget -q --no-check-certificate https://curl.se/ca/cacert.pem
     export SSL_CERT_FILE=\$PWD/cacert.pem
     export MAMBA_SSL_VERIFY=false
 
     # Install Micromamba & GATK
     if [ ! -f "micromamba_bin" ]; then
         wget -qO micromamba_bin https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-linux-64 \
-            && chmod +x micromamba_bin || true
+            && chmod +x micromamba_bin
     fi
     
-    [ -f micromamba_bin ] && ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge gatk4=4.4.0.0 -y || true
+    [ -f micromamba_bin ] && ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge gatk4=4.4.0.0 -y
     export PATH=\$PWD/env/bin:\$PATH
 
     gatk PreprocessIntervals \\
@@ -81,17 +81,17 @@ process COLLECT_READ_COUNTS {
     mkdir -p \$MAMBA_ROOT_PREFIX
 
     # SSL Fix
-    wget -q --no-check-certificate https://curl.se/ca/cacert.pem || true
+    wget -q --no-check-certificate https://curl.se/ca/cacert.pem
     export SSL_CERT_FILE=\$PWD/cacert.pem
     export MAMBA_SSL_VERIFY=false
 
     # Install Micromamba & GATK
     if [ ! -f "micromamba_bin" ]; then
         wget -qO micromamba_bin https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-linux-64 \
-            && chmod +x micromamba_bin || true
+            && chmod +x micromamba_bin
     fi
     
-    [ -f micromamba_bin ] && ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge gatk4=4.4.0.0 -y || true
+    [ -f micromamba_bin ] && ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge gatk4=4.4.0.0 -y
     export PATH=\$PWD/env/bin:\$PATH
 
     gatk CollectReadCounts \\
@@ -139,17 +139,17 @@ process GCNV_CLARITY {
     mkdir -p \$MAMBA_ROOT_PREFIX
 
     # SSL Fix
-    wget -q --no-check-certificate https://curl.se/ca/cacert.pem || true
+    wget -q --no-check-certificate https://curl.se/ca/cacert.pem
     export SSL_CERT_FILE=\$PWD/cacert.pem
     export MAMBA_SSL_VERIFY=false
 
     # Install Micromamba & GATK
     if [ ! -f "micromamba_bin" ]; then
         wget -qO micromamba_bin https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-linux-64 \
-            && chmod +x micromamba_bin || true
+            && chmod +x micromamba_bin
     fi
     
-    [ -f micromamba_bin ] && ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge gatk4=4.4.0.0 gcnvkernel fastprogress=1.0.0 -y || true
+    [ -f micromamba_bin ] && ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge gatk4=4.4.0.0 gcnvkernel fastprogress=1.0.0 -y
     export PATH=\$PWD/env/bin:\$PATH
 
     tar -xf ${pon_tar}
@@ -204,17 +204,17 @@ process ANNOTATE_INTERVALS {
     mkdir -p \$XDG_CACHE_HOME \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX
 
     # SSL Fix
-    wget -q --no-check-certificate https://curl.se/ca/cacert.pem || true
+    wget -q --no-check-certificate https://curl.se/ca/cacert.pem
     export SSL_CERT_FILE=\$PWD/cacert.pem
     export MAMBA_SSL_VERIFY=false
 
     # Install Micromamba & GATK
     if [ ! -f "micromamba_bin" ]; then
         wget -qO micromamba_bin https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-linux-64 \
-            && chmod +x micromamba_bin || true
+            && chmod +x micromamba_bin
     fi
     
-    [ -f micromamba_bin ] && ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge gatk4=4.4.0.0 -y || true
+    [ -f micromamba_bin ] && ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge gatk4=4.4.0.0 -y
     export PATH=\$PWD/env/bin:\$PATH
 
     gatk AnnotateIntervals \\
@@ -254,17 +254,17 @@ process GCNV_COHORT_RUN {
     mkdir -p \$XDG_CACHE_HOME \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX
     
     # SSL Fix
-    wget -q --no-check-certificate https://curl.se/ca/cacert.pem || true
+    wget -q --no-check-certificate https://curl.se/ca/cacert.pem
     export SSL_CERT_FILE=\$PWD/cacert.pem
     export MAMBA_SSL_VERIFY=false
 
     # Install Micromamba & GATK
     if [ ! -f "micromamba_bin" ]; then
         wget -qO micromamba_bin https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-linux-64 \
-            && chmod +x micromamba_bin || true
+            && chmod +x micromamba_bin
     fi
     
-    [ -f micromamba_bin ] && ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge gatk4=4.4.0.0 gcnvkernel fastprogress=1.0.0 -y || true
+    [ -f micromamba_bin ] && ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge gatk4=4.4.0.0 gcnvkernel fastprogress=1.0.0 -y
     export PATH=\$PWD/env/bin:\$PATH
     
     INPUT_ARGS=""
@@ -356,16 +356,16 @@ process GCNV_CASE_RUN {
     export MAMBA_ROOT_PREFIX=\$PWD/micromamba
 
     mkdir -p \$XDG_CACHE_HOME \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX
-    wget -q --no-check-certificate https://curl.se/ca/cacert.pem || true
+    wget -q --no-check-certificate https://curl.se/ca/cacert.pem
     export SSL_CERT_FILE=\$PWD/cacert.pem
     export MAMBA_SSL_VERIFY=false
 
     if [ ! -f "micromamba_bin" ]; then
         wget -qO micromamba_bin https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-linux-64 \
-            && chmod +x micromamba_bin || true
+            && chmod +x micromamba_bin
     fi
     
-    [ -f micromamba_bin ] && ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge gatk4=4.4.0.0 gcnvkernel fastprogress=1.0.0 -y || true
+    [ -f micromamba_bin ] && ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge gatk4=4.4.0.0 gcnvkernel fastprogress=1.0.0 -y
     export PATH=\$PWD/env/bin:\$PATH
 
     mkdir -p ${sample_id}-ploidy-calls
@@ -435,16 +435,16 @@ process POSTPROCESS_GCNV {
     export MAMBA_ROOT_PREFIX=\$PWD/micromamba
 
     mkdir -p \$XDG_CACHE_HOME \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX
-    wget -q --no-check-certificate https://curl.se/ca/cacert.pem || true
+    wget -q --no-check-certificate https://curl.se/ca/cacert.pem
     export SSL_CERT_FILE=\$PWD/cacert.pem
     export MAMBA_SSL_VERIFY=false
 
     if [ ! -f "micromamba_bin" ]; then
         wget -qO micromamba_bin https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-linux-64 \
-            && chmod +x micromamba_bin || true
+            && chmod +x micromamba_bin
     fi
     
-    [ -f micromamba_bin ] && ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge gatk4=4.4.0.0 gcnvkernel fastprogress=1.0.0 -y || true
+    [ -f micromamba_bin ] && ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge gatk4=4.4.0.0 gcnvkernel fastprogress=1.0.0 -y
     export PATH=\$PWD/env/bin:\$PATH
 
     # Prepare working directory base

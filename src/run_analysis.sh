@@ -86,23 +86,30 @@ PANEL="twist-exome2"
 BACKBONE_BED=""
 BACKBONE_BED_GZ=""
 BACKBONE_BED_TBI=""
+LIST_PANELS=""
+
+require_arg() { [ $# -ge 2 ] && [ -n "$2" ] || { echo -e "${RED}Error: $1 requires a value${NC}"; exit 1; }; }
 
 # 파라미터 파싱
 while [[ $# -gt 0 ]]; do
     case $1 in
         -w|--work-dir)
+            require_arg "$1" "${2:-}"
             WORK_DIR="$2"
             shift 2
             ;;
         -s|--sample)
+            require_arg "$1" "${2:-}"
             SAMPLE_NAME="$2"
             shift 2
             ;;
         -d|--data-dir)
+            require_arg "$1" "${2:-}"
             DATA_DIR="$2"
             shift 2
             ;;
         -r|--ref-dir)
+            require_arg "$1" "${2:-}"
             REF_DIR="$2"
             shift 2
             ;;
@@ -115,10 +122,12 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --aligner)
+            require_arg "$1" "${2:-}"
             ALIGNER="$2"
             shift 2
             ;;
         --variant-caller)
+            require_arg "$1" "${2:-}"
             VARIANT_CALLER="$2"
             shift 2
             ;;
@@ -135,6 +144,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --shared-ref-dir)
+            require_arg "$1" "${2:-}"
             SHARED_REF_DIR="$2"
             shift 2
             ;;
@@ -143,10 +153,12 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --panel)
+            require_arg "$1" "${2:-}"
             PANEL="$2"
             shift 2
             ;;
         --backbone-bed)
+            require_arg "$1" "${2:-}"
             BACKBONE_BED="$2"
             shift 2
             ;;
@@ -173,6 +185,7 @@ fi
 # 절대 경로로 변환
 DATA_DIR=$(realpath "$DATA_DIR")
 REF_DIR=$(realpath "$REF_DIR")
+SHARED_REF_DIR=$(realpath "$SHARED_REF_DIR" 2>/dev/null || echo "$SHARED_REF_DIR")
 
 # 패널 이름 → BED 파일 경로 해석
 # 우선순위: --backbone-bed 직접 지정 > data/bed/<name>/ 디렉터리 > 내장 패널 매핑
@@ -443,7 +456,7 @@ fi
 
 # docker ps NAME: order id (-w) + sample (sanitize for Docker: [a-zA-Z0-9][a-zA-Z0-9_.-]*)
 NF_DOCKER_NAME_RAW="gx-exome-${WORK_DIR}-${SAMPLE_NAME}"
-NF_DOCKER_NAME="$(printf '%s' "$NF_DOCKER_NAME_RAW" | sed -e 's/[^a-zA-Z0-9_.-]/-/g' -e 's/^[-_.]*//' -e 's/^$/carrier-unknown/')"
+NF_DOCKER_NAME="$(printf '%s' "$NF_DOCKER_NAME_RAW" | sed -e 's/[^a-zA-Z0-9_.-]/-/g' -e 's/^[-_.]*//' -e 's/^$/gx-exome-unknown/')"
 NF_DOCKER_NAME="${NF_DOCKER_NAME:0:200}"
 
 docker run --rm -t --name "$NF_DOCKER_NAME" \
@@ -451,18 +464,13 @@ docker run --rm -t --name "$NF_DOCKER_NAME" \
     "${DOCKER_GROUP_ARGS[@]}" \
     -e HOME=/tmp \
     -e NXF_HOME=/tmp/.nextflow \
-    -v "${DATA_DIR}/fastq:/data/fastq:ro" \
-    -v "${DATA_DIR}/analysis:/data/analysis" \
-    -v "${DATA_DIR}/output:/data/output" \
-    -v "${DATA_DIR}/log:/data/log" \
-    -v "${DATA_DIR}/data:/app/data:ro" \
     -v "${DATA_DIR}/bin:/app/bin:ro" \
     -v "${DATA_DIR}/fastq:${DATA_DIR}/fastq:ro" \
     -v "${DATA_DIR}/analysis:${DATA_DIR}/analysis" \
     -v "${DATA_DIR}/output:${DATA_DIR}/output" \
     -v "${DATA_DIR}/log:${DATA_DIR}/log" \
     -v "${DATA_DIR}/data:${DATA_DIR}/data:ro" \
-    -v /data/reference:/data/reference:ro \
+    -v "${SHARED_REF_DIR}:${SHARED_REF_DIR}:ro" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "${DOCKER_BIN}:/usr/local/bin/docker:ro" \
     -e NXF_OPTS="-Xms1g -Xmx4g" \

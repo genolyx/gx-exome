@@ -7,11 +7,12 @@ dependencies:
   - python=3.11
   - pip
   # Visualization tools (pre-installed to avoid runtime micromamba in PREPARE_VIZ_RESOURCES)
-  - igv-reports
-  - pysam
-  - htslib
-  - bwa
-  - samtools
+  - igv-reports=1.12.0
+  - pysam=0.22.1
+  - htslib=1.21
+  - bwa=0.7.18
+  - samtools=1.21
+  - pandas=2.2.3
   - pip:
     - flask==3.0.0
     - requests==2.31.0
