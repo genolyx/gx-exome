@@ -443,6 +443,10 @@ fi
 # 분석 시작
 echo -e "${YELLOW}Starting analysis...${NC}"
 echo "  Started at: $(pipeline_timestamp)"
+if [ -n "${NEXTFLOW_RESUME}" ]; then
+    echo -e "  ${YELLOW}Note:${NC} -resume reuses the Nextflow cache — the console only shows tasks that actually run again."
+    echo "        Cached steps are skipped (fast run). Use --fresh to clear work/.nextflow and re-run all steps with full logs."
+fi
 echo ""
 
 # Docker 컨테이너 실행 (태스크는 NXF_DOCKER_TASK_USER, 종료 시 docker chown)
@@ -490,14 +494,14 @@ docker run --rm -t --name "$NF_DOCKER_NAME" \
     -e NXF_DATA_DIR="${DATA_DIR}" \
     -e NXF_DOCKER_TASK_USER="${CHOWN_SPEC}" \
     -e HOST_WORK_DIR="${HOST_WORK_DIR}" \
-    -e NXF_ANSI_LOG=false \
-    -e NXF_ANSI_SUMMARY=false \
+    -e NXF_ANSI_LOG=true \
+    -e NXF_ANSI_SUMMARY=true \
     -e NO_COLOR=1 \
     gx-exome:latest \
     bash -c "
         cd ${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME} && \
         nextflow -log ${DATA_DIR}/log/${WORK_DIR}/${SAMPLE_NAME}/nextflow.log run /app/bin/main.nf \
-            -ansi-log false ${NEXTFLOW_RESUME} ${NXF_PROFILE} \
+            -ansi-log true ${NEXTFLOW_RESUME} ${NXF_PROFILE} \
             --fastq_dir ${DATA_DIR}/fastq/${WORK_DIR}/${SAMPLE_NAME} \
             --ref_fasta ${DATA_DIR}/data/refs/GRCh38.fasta \
             --ref_fai ${DATA_DIR}/data/refs/GRCh38.fasta.fai \
