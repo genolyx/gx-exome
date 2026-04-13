@@ -11,8 +11,12 @@ params.skip_mosdepth_per_base = false
 params.skip_gene_coverage_tsv = false
 params.gene_coverage_bed = null
 params.skip_pgx = false
+params.skip_apoe = false
+// Proactive health test: APOE (AD risk context) is opt-in via include_apoe; default off for that mode
+params.proactive_health_test = false
+params.include_apoe = false
 params.pgx_reference_genome = 'GRCh38'
-params.pgx_container = 'pgkb/pharmcat:2.15.5'
+params.pgx_container = 'pgkb/pharmcat:3.2.0'
 
 // -------------------------------------------------------
 // Module imports
@@ -53,6 +57,7 @@ include { RUN_PGX_PHARMCAT; FINALIZE_PGX_JSON } from './modules/pgx'
 include { RUN_ALDY_CYP2D6 }                     from './modules/aldy'
 include { RUN_PGX_CUSTOM }                       from './modules/pgx_custom'
 include { GENERATE_PGX_PANEL_REPORT }             from './modules/pgx_report'
+include { RUN_APOE }                              from './modules/apoe'
 
 // -------------------------------------------------------
 // Workflow
@@ -86,7 +91,26 @@ workflow {
     def skipPgx = java.lang.Boolean.parseBoolean(
         params.skip_pgx != null ? params.skip_pgx.toString() : 'false'
     )
+    def skipApoe = java.lang.Boolean.parseBoolean(
+        params.skip_apoe != null ? params.skip_apoe.toString() : 'false'
+    )
+    def proactiveHealth = java.lang.Boolean.parseBoolean(
+        params.proactive_health_test != null ? params.proactive_health_test.toString() : 'false'
+    )
+    def includeApoe = java.lang.Boolean.parseBoolean(
+        params.include_apoe != null ? params.include_apoe.toString() : 'false'
+    )
+    // Standard runs: APOE on by default (unless skip_apoe). Proactive health: APOE only if include_apoe.
+    def runApoe = params.backbone_bed && !skipApoe && (!proactiveHealth || includeApoe)
+    def apoeBanner = !params.backbone_bed
+        ? 'SKIPPED (no backbone_bed)'
+        : skipApoe
+            ? 'SKIPPED (skip_apoe)'
+            : proactiveHealth && !includeApoe
+                ? 'SKIPPED (proactive health; opt-in with --include_apoe)'
+                : 'ENABLED'
     println "  PGx (PharmCAT → pgx/): ${skipPgx ? 'SKIPPED (skip_pgx)' : 'ENABLED (default)'}"
+    println "  APOE (ε2/ε3/ε4 → apoe/): ${apoeBanner}"
     println "=" * 60
 
     // Channel for FASTQ pairs
@@ -367,19 +391,58 @@ workflow {
         annotated_vcf_ch = vcf_ch
     }
 
-    // Fan-out: PGx (unless skip_pgx), IGV snapshots, and summary each need a copy of the annotated/filtered VCF channel.
+    // Fan-out: PGx (unless skip_pgx), optional APOE, IGV snapshots, and summary each need a copy of the annotated/filtered VCF channel.
+    // APOE branch only when runApoe (proactive health requires --include_apoe).
     // Nextflow 25+ removed Channel.into — use multiMap (operator reference).
-    if (!skipPgx && params.backbone_bed) {
+    if (params.backbone_bed) {
+        if (runApoe) {
+            annotated_vcf_ch
+                .multiMap { item ->
+                    viz: item
+                    pgx: item
+                    sum: item
+                    apoe: item
+                }
+                .set { anno_mm }
+            anno_viz_ch = anno_mm.viz
+            anno_pgx_base_ch = anno_mm.pgx
+            anno_sum_ch = anno_mm.sum
+            anno_apoe_ch = anno_mm.apoe
+        } else {
+            annotated_vcf_ch
+                .multiMap { item ->
+                    viz: item
+                    pgx: item
+                    sum: item
+                }
+                .set { anno_mm_no_apoe }
+            anno_viz_ch = anno_mm_no_apoe.viz
+            anno_pgx_base_ch = anno_mm_no_apoe.pgx
+            anno_sum_ch = anno_mm_no_apoe.sum
+        }
+    } else {
         annotated_vcf_ch
             .multiMap { item ->
                 viz: item
-                pgx: item
                 sum: item
             }
-            .set { anno_mm }
-        anno_viz_ch = anno_mm.viz
-        anno_pgx_base_ch = anno_mm.pgx
-        anno_sum_ch = anno_mm.sum
+            .set { anno_mm2 }
+        anno_viz_ch = anno_mm2.viz
+        anno_sum_ch = anno_mm2.sum
+    }
+
+    // APOE ε2/ε3/ε4 — before PGx panel HTML so apoe_result.json can be merged into pgx_panel_report.html (PGx review tab)
+    if (runApoe) {
+        apoe_py = Channel.fromPath("${projectDir}/modules/apoe_genotype.py", checkIfExists: true)
+        RUN_APOE(anno_apoe_ch.combine(apoe_py))
+        apoe_json_for_summary = RUN_APOE.out.result_json
+        apoe_review_for_summary = RUN_APOE.out.review_txt
+    } else {
+        apoe_json_for_summary = Channel.fromPath("${projectDir}/modules/apoe_skipped_placeholder.json", checkIfExists: true)
+        apoe_review_for_summary = Channel.fromPath("${projectDir}/modules/apoe_review_skipped.txt", checkIfExists: true)
+    }
+
+    if (!skipPgx && params.backbone_bed) {
         pgx_py = Channel.fromPath("${projectDir}/modules/pgx_finalize.py", checkIfExists: true)
 
         // Aldy CYP2D6 — runs on BAM in parallel with variant calling / VEP;
@@ -403,21 +466,13 @@ workflow {
             .combine(pgx_custom_tsv)
         RUN_PGX_CUSTOM(pgx_custom_input)
 
-        // Combined PGx panel HTML report (PharmCAT + extended panel)
+        // Combined PGx panel HTML report (PharmCAT + extended panel + APOE review block for proactive health / opt-in)
         pgx_report_script = Channel.fromPath("${projectDir}/modules/pgx_panel_report.py", checkIfExists: true)
         pgx_report_input = RUN_PGX_PHARMCAT.out.staged
             .combine(RUN_PGX_CUSTOM.out.result_json)
             .combine(pgx_report_script)
+            .combine(apoe_json_for_summary)
         GENERATE_PGX_PANEL_REPORT(pgx_report_input)
-    } else {
-        annotated_vcf_ch
-            .multiMap { item ->
-                viz: item
-                sum: item
-            }
-            .set { anno_mm2 }
-        anno_viz_ch = anno_mm2.viz
-        anno_sum_ch = anno_mm2.sum
     }
 
     // -------------------------------------------------------
@@ -464,7 +519,9 @@ workflow {
         CYP21_PARALOG_PILEUP.out.tsv.collect(),
         CYP21_HOTSPOT_PILEUP.out.tsv.collect(),
         file(params.cyp21a2_hotspots),
-        annotated_vcf_for_summary
+        annotated_vcf_for_summary,
+        apoe_json_for_summary,
+        apoe_review_for_summary
     )
 }
 
@@ -507,6 +564,7 @@ workflow.onComplete {
             def pseudogeneOut  = file("${params.output_dir}/pseudogene")
             def qcOut          = file("${params.output_dir}/qc")
             def pgxOut         = file("${params.output_dir}/pgx")
+            def apoeOut        = file("${params.output_dir}/apoe")
             def pipelineInfoOut = file("${params.output_dir}/pipeline_info")
 
             summaryOut.mkdirs()
@@ -518,6 +576,7 @@ workflow.onComplete {
             pseudogeneOut.mkdirs()
             qcOut.mkdirs()
             pgxOut.mkdirs()
+            apoeOut.mkdirs()
             pipelineInfoOut.mkdirs()
 
             def copyScript = """
@@ -567,6 +626,9 @@ workflow.onComplete {
             fi
             if [ -d "${params.outdir}/pgx" ]; then
                 cp -r ${params.outdir}/pgx/* ${pgxOut}/ 2>/dev/null || true
+            fi
+            if [ -d "${params.outdir}/apoe" ]; then
+                cp -r ${params.outdir}/apoe/* ${apoeOut}/ 2>/dev/null || true
             fi
             if [ -d "${params.outdir}/pipeline_info" ]; then
                 cp ${params.outdir}/pipeline_info/trace.txt ${pipelineInfoOut}/ 2>/dev/null || true

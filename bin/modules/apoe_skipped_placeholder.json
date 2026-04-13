@@ -1,0 +1,6 @@
+{
+  "schema": "gx_exome_apoe_v1",
+  "status": "skipped",
+  "sample_id": null,
+  "message": "APOE was not run for this order (opt-out, proactive health without --include_apoe, --skip_apoe, or missing backbone BED)."
+}

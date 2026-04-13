@@ -161,20 +161,31 @@ RISK_FUNCTIONS = {"no function", "decreased function", "unfavorable response all
 SKIP_PHENOTYPES = {"no result", "n/a", ""}
 
 seen_genes = set()
-for source in ("CPIC", "DPWG"):
-    reports = data.get("geneReports", {}).get(source, {})
-    if not isinstance(reports, dict):
+gene_reports = data.get("geneReports", {})
+# v2: geneReports.CPIC.<gene> / geneReports.DPWG.<gene>
+# v3: geneReports.<gene> (flat)
+source_gene_pairs = []
+if "CPIC" in gene_reports or "DPWG" in gene_reports:
+    for source in ("CPIC", "DPWG"):
+        reports = gene_reports.get(source, {})
+        if isinstance(reports, dict):
+            for gn in sorted(reports.keys()):
+                source_gene_pairs.append((source, gn, reports[gn]))
+else:
+    for gn in sorted(gene_reports.keys()):
+        gd = gene_reports[gn]
+        if isinstance(gd, dict) and gd.get("recommendationDiplotypes"):
+            source_gene_pairs.append(("CPIC", gn, gd))
+
+for source, gene_name, gene_data in source_gene_pairs:
+    if gene_name in seen_genes:
         continue
-    for gene_name in sorted(reports.keys()):
-        if gene_name in seen_genes:
-            continue
-        gene_data = reports[gene_name]
-        if not isinstance(gene_data, dict):
-            continue
-        call_src = gene_data.get("callSource", "")
-        rec_dips = gene_data.get("recommendationDiplotypes", [])
-        if not rec_dips:
-            continue
+    if not isinstance(gene_data, dict):
+        continue
+    call_src = gene_data.get("callSource", "")
+    rec_dips = gene_data.get("recommendationDiplotypes", [])
+    if not rec_dips:
+        continue
 
         for dip in rec_dips:
             a1 = dip.get("allele1") or {}

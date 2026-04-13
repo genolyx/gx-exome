@@ -133,6 +133,97 @@ def esc(s):
     return html_mod.escape(str(s)) if s else ""
 
 
+def load_apoe_review_html(apoe_path):
+    """
+    APOE ε2/ε3/ε4 block for PGx panel HTML (portal review tab).
+    Uses gx_exome_apoe_v1 JSON from apoe_result.json or skipped placeholder.
+    """
+    if not apoe_path or not os.path.isfile(apoe_path) or os.path.getsize(apoe_path) == 0:
+        return (
+            '<div class="section apoe-review-section">'
+            '<div class="section-header">APOE — Alzheimer risk context (ε2 / ε3 / ε4)</div>'
+            '<div class="apoe-review-body"><p class="apoe-muted">No APOE data file staged.</p></div></div>'
+        )
+    try:
+        with open(apoe_path, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception as e:
+        return (
+            f'<div class="section apoe-review-section">'
+            f'<div class="section-header">APOE — Alzheimer risk context (ε2 / ε3 / ε4)</div>'
+            f'<div class="apoe-review-body"><p>Could not read APOE JSON: {esc(e)}</p></div></div>'
+        )
+
+    if d.get("status") == "skipped":
+        msg = esc(d.get("message", "APOE was not run for this order."))
+        return f"""<div class="section apoe-review-section">
+  <div class="section-header" onclick="toggleSection('apoe-skip-inner')">
+    <span>APOE — Alzheimer risk context (ε2 / ε3 / ε4) — <strong>Review</strong></span>
+    <span class="toggle" id="apoe-skip-inner-toggle">&#9660;</span>
+  </div>
+  <div id="apoe-skip-inner">
+    <div class="apoe-review-body apoe-skipped">
+      <p><strong>Not performed</strong> for this order.</p>
+      <p class="apoe-muted">Proactive health: APOE is optional — opt in with <code>--include_apoe</code> (or your portal equivalent) when Alzheimer risk context is requested.</p>
+      <p class="apoe-msg">{msg}</p>
+      <p class="apoe-muted">Extended PGx table below may still list rs429358/rs7412 for lipid/drug context; the ε2/ε3/ε4 <em>diplotype</em> appears only when APOE analysis is enabled.</p>
+    </div>
+  </div>
+</div>"""
+
+    if d.get("status") != "ok":
+        err = esc(d.get("error", d.get("status", "error")))
+        note = esc(d.get("note", ""))
+        extra = f"<p>{note}</p>" if note else ""
+        return f"""<div class="section apoe-review-section">
+  <div class="section-header">APOE — Alzheimer risk context (ε2 / ε3 / ε4) — Review</div>
+  <div class="apoe-review-body apoe-error">
+    <p><strong>Genotyping incomplete or non-canonical haplotype.</strong></p>
+    <p><code>{err}</code></p>
+    {extra}
+  </div>
+</div>"""
+
+    snps = d.get("snps", {})
+    r1 = snps.get("rs429358", {})
+    r2 = snps.get("rs7412", {})
+    g1 = r1.get("genotype_bases")
+    g2 = r2.get("genotype_bases")
+    gt1 = f"{g1[0]}/{g1[1]}" if isinstance(g1, list) and len(g1) == 2 else esc(str(g1))
+    gt2 = f"{g2[0]}/{g2[1]}" if isinstance(g2, list) and len(g2) == 2 else esc(str(g2))
+    dip = esc(d.get("diplotype_display", ""))
+    phase = esc(d.get("phasing", ""))
+    risk = esc(d.get("risk_context", ""))
+    disc = esc(d.get("disclaimer", ""))
+
+    multi = ""
+    dps = d.get("diplotypes_possible") or []
+    if len(dps) > 1:
+        parts = [esc("/".join(p)) for p in dps]
+        multi = "<p><strong>Possible diplotypes:</strong> " + ", ".join(parts) + "</p>"
+
+    return f"""<div class="section apoe-review-section">
+  <div class="section-header" onclick="toggleSection('apoe-review-inner')">
+    <span>APOE — Alzheimer risk context (ε2 / ε3 / ε4) — <strong>Review</strong> (proactive health)</span>
+    <span class="toggle" id="apoe-review-inner-toggle">&#9660;</span>
+  </div>
+  <div id="apoe-review-inner">
+    <div class="apoe-review-body apoe-ok">
+      <table class="apoe-mini">
+        <tr><th>Diplotype (ε / ε)</th><td><strong>{dip}</strong></td></tr>
+        <tr><th>Phasing</th><td>{phase}</td></tr>
+        <tr><th>rs429358 (GRCh38)</th><td><code>{gt1}</code></td></tr>
+        <tr><th>rs7412 (GRCh38)</th><td><code>{gt2}</code></td></tr>
+      </table>
+      {multi}
+      <p class="apoe-risk"><strong>Population context:</strong> {risk}</p>
+      <p class="apoe-disc">{disc}</p>
+      <p class="apoe-muted">Full text: <code>apoe/apoe_review.txt</code> &middot; JSON: <code>apoe/apoe_result.json</code></p>
+    </div>
+  </div>
+</div>"""
+
+
 def status_badge(status):
     colors = {
         "actionable": ("#c53030", "#fff5f5", "Actionable"),
@@ -249,6 +340,18 @@ a:hover { text-decoration: underline; }
 .ev-4 { background: #f7fafc; color: #a0aec0; }
 .footer { text-align: center; padding: 16px; font-size: 12px; color: #a0aec0; }
 .hidden { display: none; }
+.apoe-review-section { border-left: 4px solid #805ad5; }
+.apoe-review-body { padding: 16px 20px; }
+.apoe-skipped { background: #faf5ff; }
+.apoe-ok { background: #f7fafc; }
+.apoe-error { background: #fff5f5; }
+.apoe-mini { width: 100%; max-width: 560px; font-size: 13px; margin-bottom: 12px; border-collapse: collapse; }
+.apoe-mini th { text-align: left; font-weight: 600; color: #4a5568; padding: 8px 16px 8px 0; border-bottom: 1px solid #e2e8f0; width: 40%; }
+.apoe-mini td { padding: 8px 0; border-bottom: 1px solid #e2e8f0; }
+.apoe-muted { color: #718096; font-size: 13px; line-height: 1.45; }
+.apoe-risk { font-size: 13px; line-height: 1.5; color: #2d3748; margin-top: 12px; }
+.apoe-disc { font-size: 11px; color: #a0aec0; margin-top: 8px; }
+.apoe-msg { font-size: 13px; color: #553c9a; }
 """
 
 JS = """\
@@ -295,7 +398,7 @@ function sortTable(tableId, colIdx) {
 """
 
 
-def build_html(sample_id, pharmcat_rows, custom_rows):
+def build_html(sample_id, pharmcat_rows, custom_rows, apoe_html=""):
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     total_genes = len(set(r["gene"] for r in pharmcat_rows)) + len(set(r["gene"] for r in custom_rows))
     actionable_count = sum(1 for r in pharmcat_rows if r["status"] == "actionable")
@@ -343,6 +446,7 @@ def build_html(sample_id, pharmcat_rows, custom_rows):
   </select>
   <label><input type="checkbox" id="hideRef" onchange="filterTable()"> Hide reference/normal</label>
 </div>
+{apoe_html}
 <div class="section">
   <div class="section-header" onclick="toggleSection('pharmcat-body')">
     <span>PharmCAT \u2014 CPIC/DPWG Guided Genes ({len(pharmcat_rows)} genes)</span>
@@ -379,13 +483,15 @@ def main():
     parser.add_argument("--phenotype-json", required=True)
     parser.add_argument("--report-json", default="")
     parser.add_argument("--custom-json", required=True)
+    parser.add_argument("--apoe-json", default="", help="gx_exome_apoe_v1 JSON (or skipped placeholder) for APOE review block")
     parser.add_argument("--output", default="pgx_panel_report.html")
     args = parser.parse_args()
 
     drug_map = load_drug_map(args.report_json)
     pharmcat_rows = load_pharmcat_rows(args.phenotype_json, drug_map)
     custom_rows = load_custom_rows(args.custom_json)
-    html_content = build_html(args.sample_id, pharmcat_rows, custom_rows)
+    apoe_html = load_apoe_review_html(args.apoe_json) if (args.apoe_json or "").strip() else ""
+    html_content = build_html(args.sample_id, pharmcat_rows, custom_rows, apoe_html)
 
     with open(args.output, "w", encoding="utf-8") as f:
         f.write(html_content)

@@ -30,6 +30,8 @@ Options:
     --variant-caller CALLER    Variant caller: gatk, deepvariant (default), or strelka2
     --skip-vep                 Skip VEP annotation (use legacy snpEff mode)
     --skip-pgx                 Skip PharmCAT PGx (default: PGx runs every exome run)
+    --proactive-health         Proactive health test: APOE (Alzheimer risk context) is off unless --include-apoe
+    --include-apoe             Opt in to APOE (for use with --proactive-health)
     --shared-ref-dir DIR       Shared reference root (default: /data/reference)
     --fresh                    Delete sample work/ and .nextflow cache, then run (no -resume)
     --panel PANEL              Exome capture panel name (default: twist-exome2)
@@ -80,6 +82,8 @@ ALIGNER="bwa-mem2"
 VARIANT_CALLER="deepvariant"
 SKIP_VEP="true"
 SKIP_PGX="false"
+PROACTIVE_HEALTH="false"
+INCLUDE_APOE="false"
 SHARED_REF_DIR="/data/reference"
 FRESH=""
 PANEL="twist-exome2"
@@ -141,6 +145,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-pgx)
             SKIP_PGX="true"
+            shift
+            ;;
+        --proactive-health)
+            PROACTIVE_HEALTH="true"
+            shift
+            ;;
+        --include-apoe)
+            INCLUDE_APOE="true"
             shift
             ;;
         --shared-ref-dir)
@@ -503,6 +515,8 @@ docker run --rm -t --name "$NF_DOCKER_NAME" \
             --variant_caller ${VARIANT_CALLER} \
             --skip_vep ${SKIP_VEP} \
             --skip_pgx ${SKIP_PGX} \
+            --proactive_health_test ${PROACTIVE_HEALTH} \
+            --include_apoe ${INCLUDE_APOE} \
             ${SKIP_CNV} \
             --outdir ${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME} \
             --output_dir ${DATA_DIR}/output/${WORK_DIR}/${SAMPLE_NAME} \

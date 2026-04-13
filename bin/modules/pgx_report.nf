@@ -11,7 +11,7 @@ process GENERATE_PGX_PANEL_REPORT {
     publishDir "${params.outdir}/pgx", mode: 'copy', pattern: 'pgx_panel_report.html'
 
     input:
-    tuple val(sample_id), path(pgx_staging), path(custom_json), path(report_script)
+    tuple val(sample_id), path(pgx_staging), path(custom_json), path(report_script), path(apoe_json)
 
     output:
     path "pgx_panel_report.html", emit: report_html
@@ -23,6 +23,7 @@ process GENERATE_PGX_PANEL_REPORT {
         --phenotype-json "${pgx_staging}/${sample_id}_pgx.phenotype.json" \
         --report-json "${pgx_staging}/${sample_id}_pgx.report.json" \
         --custom-json "${custom_json}" \
+        --apoe-json "${apoe_json}" \
         --output pgx_panel_report.html
 
     if [ ! -f pgx_panel_report.html ]; then

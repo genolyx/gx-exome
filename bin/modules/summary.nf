@@ -17,6 +17,8 @@ process GENERATE_SUMMARY_REPORT {
     path cyp21_hotspot_pileup_tsvs
     path cyp21a2_hotspots
     path annotated_vcfs
+    path apoe_json, stageAs: 'apoe_result.json'
+    path apoe_review, stageAs: 'apoe_review.txt'
 
     output:
     path "*_summary_report.txt", emit: summary
@@ -782,6 +784,30 @@ def hotspot_compact_summary(sample_rows, defs_ok):
             hits.append(f"{r['id']}:{r['status']}")
     return ','.join(hits) if hits else 'none'
 
+def load_apoe_json(path):
+    # Single staged apoe_result.json (real result or skipped placeholder).
+    if not path or not os.path.isfile(path):
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def apoe_summary_cell(sample_id, apoe_data):
+    # One column for the tabular summary report.
+    if not apoe_data:
+        return "-"
+    if apoe_data.get("status") == "skipped":
+        return "not_run"
+    sid = apoe_data.get("sample_id")
+    if sid and sid != sample_id:
+        return "?"
+    if apoe_data.get("status") != "ok":
+        err = apoe_data.get("error", "error")
+        return err[:40] if err else "error"
+    return apoe_data.get("diplotype_display", "?")
+
 # Main
 manta_files = glob.glob("*_manta.vcf.gz")
 gcnv_files = glob.glob("*_cnv.vcf.gz")
@@ -809,6 +835,8 @@ s_res, smaca_extras = parse_smaca(sma_files)
 v_res = parse_intron_verify(ver_files)
 
 hotspot_defs = load_cyp21_hotspots("${cyp21a2_hotspots}")
+apoe_data = load_apoe_json("apoe_result.json")
+
 variant_vcfs = sorted(
     glob.glob("*_annotated.vcf.gz") + glob.glob("*_filtered.vcf.gz"),
     key=os.path.basename,
@@ -822,9 +850,14 @@ for _vf in variant_vcfs:
 all_samples = sorted(
     set(m_res.keys()) | set(g_res.keys()) | set(p_res.keys()) | set(hba_paralog_lines.keys()) | set(cyp21_paralog_lines.keys()) | set(hotspot_by_sample.keys()) | set(hotspot_pileup_by_sample.keys())
 )
+_apoe_sid = apoe_data.get("sample_id")
+if _apoe_sid and apoe_data.get("status") != "skipped":
+    _apoe_set = set(all_samples)
+    _apoe_set.add(_apoe_sid)
+    all_samples = sorted(_apoe_set)
 
 # Generate Individual Reports
-header = "Sample\\tParaphase(SMN/GBA)\\tSMAca\\tFragileX(FMR1)\\tHBA_Ratio\\tCYP21A2_Ratio\\tLarge_SVs(Manta/GCNV)\\tQC_Warnings"
+header = "Sample\\tParaphase(SMN/GBA)\\tSMAca\\tFragileX(FMR1)\\tHBA_Ratio\\tCYP21A2_Ratio\\tLarge_SVs(Manta/GCNV)\\tQC_Warnings\\tAPOE(ε2/ε3/ε4)"
 
 for s in all_samples:
     # 1. Individual Summary Report
@@ -849,7 +882,8 @@ for s in all_samples:
         warn_str = " | ".join(warns) if warns else "PASS"
 
         cyp_full = f"{c_res.get(s, '-')}|NM000500_hotspots={hotspot_compact_summary(hotspot_by_sample.get(s), bool(hotspot_defs))}"
-        line = f"{s}\\t{p_res.get(s, '-')}\\t{s_res.get(s, '-')}\\t{e_res.get(s, '-')}\\t{h_res.get(s, '-')}\\t{cyp_full}\\t{sv_str}\\t{warn_str}"
+        apoe_cell = apoe_summary_cell(s, apoe_data)
+        line = f"{s}\\t{p_res.get(s, '-')}\\t{s_res.get(s, '-')}\\t{e_res.get(s, '-')}\\t{h_res.get(s, '-')}\\t{cyp_full}\\t{sv_str}\\t{warn_str}\\t{apoe_cell}"
         out.write(line + "\\n")
 
     # 2. Individual Detailed Report
@@ -933,6 +967,17 @@ for s in all_samples:
 
         out.write("EXPANSION HUNTER (Fragile X / FMR1):\\n")
         out.write(f"  {e_res.get(s, 'No Data')}\\n\\n")
+
+        out.write("APOE REVIEW (Alzheimer risk — ε2 / ε3 / ε4):\\n")
+        out.write("  Standalone file (same content): apoe/apoe_review.txt next to this order's outputs\\n")
+        try:
+            with open("apoe_review.txt", "r", encoding="utf-8", errors="replace") as _arf:
+                _ar = _arf.read()
+            for _ln in _ar.splitlines():
+                out.write(f"  {_ln}\\n")
+        except OSError:
+            out.write("  (apoe_review.txt not staged)\\n")
+        out.write("\\n")
         
         # DMD SECTION
         out.write("DMD ANALYSIS (ChrX:31.1M-33.3M):\\n")

@@ -1,0 +1,5 @@
+APOE analysis was not performed for this order.
+
+Typical reasons: proactive health mode without opt-in (--include_apoe), --skip_apoe, or analysis run without a backbone/capture BED.
+
+For a full APOE ε2/ε3/ε4 review, enable APOE in the pipeline and see apoe/ when present.
