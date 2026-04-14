@@ -72,13 +72,6 @@ def main() -> None:
     ap.add_argument("-o", "--output", required=True, type=Path, help="Output TSV path")
     args = ap.parse_args()
 
-    bam = pysam.AlignmentFile(args.bam, "rb")
-    default_chrom = pick_chr6(bam)
-    bam.close()
-    if not default_chrom:
-        print("BAM has no chr6 or 6 contig.", file=sys.stderr)
-        sys.exit(1)
-
     sites = load_hotspot_rows(args.sites)
     if not sites:
         print("No hotspot rows loaded from --sites.", file=sys.stderr)
@@ -104,63 +97,70 @@ def main() -> None:
         "pileup",
     ]
 
-    with open(args.output, "w", newline="") as out:
-        w = csv.DictWriter(out, fieldnames=fieldnames, delimiter="\t")
-        w.writeheader()
+    with pysam.AlignmentFile(args.bam, "rb") as bam:
+        default_chrom = pick_chr6(bam)
+        if not default_chrom:
+            print("BAM has no chr6 or 6 contig.", file=sys.stderr)
+            sys.exit(1)
+        bam_refs = set(bam.references)
 
-        for h in sites:
-            chrom = h["chrom"]
-            chrom = normalize_contig(args.bam, chrom) or default_chrom
-            pos = h["pos"]
-            ref = h["ref"]
-            alts = h["alts"]
+        with open(args.output, "w", newline="") as out:
+            w = csv.DictWriter(out, fieldnames=fieldnames, delimiter="\t")
+            w.writeheader()
 
-            ct = pileup_acgt_at_1bp(
-                args.bam,
-                chrom,
-                pos,
-                hgvs_coding_minus_strand=False,
+            for h in sites:
+                chrom = h["chrom"]
+                chrom = normalize_contig(bam_refs, chrom) or default_chrom
+                pos = h["pos"]
+                ref = h["ref"]
+                alts = h["alts"]
+
+                ct = pileup_acgt_at_1bp(
+                    bam,
+                    chrom,
+                    pos,
+                    hgvs_coding_minus_strand=False,
+                )
+                d = depth(ct) if ct else 0
+                ref_count = int(ct[ref]) if ct and ref in ct else 0
+                alt_expected_count = 0
+                if ct:
+                    for a in alts:
+                        if a in ct:
+                            alt_expected_count += int(ct[a])
+
+                ref_frac = f"{ref_count / d:.6f}" if d else "NA"
+                alt_frac = f"{alt_expected_count / d:.6f}" if d else "NA"
+
+                w.writerow(
+                    {
+                        "id": h["id"],
+                        "label": h["label"],
+                        "chrom": chrom,
+                        "pos": pos,
+                        "ref": ref,
+                        "expected_alts": ",".join(alts),
+                        "A": ct["A"] if ct else 0,
+                        "C": ct["C"] if ct else 0,
+                        "G": ct["G"] if ct else 0,
+                        "T": ct["T"] if ct else 0,
+                        "N": ct["N"] if ct else 0,
+                        "depth": d,
+                        "ref_count": ref_count,
+                        "alt_expected_count": alt_expected_count,
+                        "ref_frac": ref_frac,
+                        "alt_frac": alt_frac,
+                        "pileup": fmt_acgt(ct),
+                    }
+                )
+
+            out.write(
+                "# ##CYP21_HOTSPOT_PILEUP_GRCh38 chr6 reference coordinates; "
+                "A/C/G/T in reference forward strand (matches cyp21_paralog_pileup). "
+                "expected_alts = catalogued hotspot alternate(s) from cyp21a2_hotspots.tsv (not inferred from data). "
+                "alt_frac = reads matching those alts / depth. "
+                "Compare alt_frac to variant caller GT at the same positions.\n"
             )
-            d = depth(ct) if ct else 0
-            ref_count = int(ct[ref]) if ct and ref in ct else 0
-            alt_expected_count = 0
-            if ct:
-                for a in alts:
-                    if a in ct:
-                        alt_expected_count += int(ct[a])
-
-            ref_frac = f"{ref_count / d:.6f}" if d else "NA"
-            alt_frac = f"{alt_expected_count / d:.6f}" if d else "NA"
-
-            w.writerow(
-                {
-                    "id": h["id"],
-                    "label": h["label"],
-                    "chrom": chrom,
-                    "pos": pos,
-                    "ref": ref,
-                    "expected_alts": ",".join(alts),
-                    "A": ct["A"] if ct else 0,
-                    "C": ct["C"] if ct else 0,
-                    "G": ct["G"] if ct else 0,
-                    "T": ct["T"] if ct else 0,
-                    "N": ct["N"] if ct else 0,
-                    "depth": d,
-                    "ref_count": ref_count,
-                    "alt_expected_count": alt_expected_count,
-                    "ref_frac": ref_frac,
-                    "alt_frac": alt_frac,
-                    "pileup": fmt_acgt(ct),
-                }
-            )
-
-        out.write(
-            "# ##CYP21_HOTSPOT_PILEUP_GRCh38 chr6 reference coordinates; "
-            "A/C/G/T in reference forward strand (matches cyp21_paralog_pileup). "
-            "expected_alts = catalogued hotspot alternate(s) from cyp21a2_hotspots.tsv (not inferred from data). "
-            "alt_frac = reads matching those alts / depth. "
-            "Compare alt_frac to variant caller GT at the same positions.\n"
-        )
 
 
 if __name__ == "__main__":

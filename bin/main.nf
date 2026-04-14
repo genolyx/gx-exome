@@ -113,9 +113,29 @@ workflow {
     println "  APOE (ε2/ε3/ε4 → apoe/): ${apoeBanner}"
     println "=" * 60
 
-    // Channel for FASTQ pairs
+    // FASTQ pairs: explicit R1→R2 pairing. Nextflow's fromFilePairs(*_R{1,2}_*) has proven unreliable
+    // for some Illumina names (channel stays empty; only PREPARE_VIZ_RESOURCES runs → false SUCCESS).
+    // We discover *_R1_* files synchronously, fail fast if none or R2 missing, then emit [sample_id,[R1,R2]].
+    def fqDir = new File(params.fastq_dir as String)
+    if (!fqDir.isDirectory()) {
+        error "FASTQ directory does not exist or is not a directory: ${params.fastq_dir}"
+    }
+    def r1Files = fqDir.listFiles()?.findAll { f ->
+        f.file && f.name.contains('_R1_') && (f.name.endsWith('.fq.gz') || f.name.endsWith('.fastq.gz'))
+    }?.sort { a, b -> a.name <=> b.name }
+    if (!r1Files) {
+        error "No *_R1_*.{fastq|fq}.gz files under ${params.fastq_dir}. Pair each R1 with an R2 file (same name with _R2_ in place of _R1_)."
+    }
+    println "FASTQ: ${r1Files.size()} R1 file(s) → pairing with matching _R2_ reads"
     Channel
-        .fromFilePairs("${params.fastq_dir}/*_{1,2,R1,R2}*.{fastq,fq}.gz")
+        .fromList(r1Files.collect { it.toString() })
+        .map { String r1path ->
+            def r1 = file(r1path)
+            def r2path = r1path.replace('_R1_', '_R2_')
+            def r2 = file(r2path, checkIfExists: true)
+            def sid = r1.name.replaceAll(/_R1_.*/, '')
+            tuple(sid, [r1, r2])
+        }
         .set { fastq_ch }
 
     ref_fasta = file(params.ref_fasta)
@@ -129,11 +149,30 @@ workflow {
     // -------------------------------------------------------
     // 1. Alignment — BWA-MEM or BWA-MEM2
     // -------------------------------------------------------
+    // If params.ref_bwa*_indices points at a missing or empty dir, Channel.fromPath().collect()
+    // yields an empty list — ALIGN never schedules tasks but PREPARE_VIZ_RESOURCES still runs → false SUCCESS.
+    def dirHasFilesMatching = { String dir, java.util.regex.Pattern namePat ->
+        try {
+            def d = new File(dir)
+            if (!d.isDirectory()) return false
+            return d.listFiles()?.any { f -> f.isFile() && (f.getName() ==~ namePat) }
+        } catch (Throwable t) {
+            return false
+        }
+    }
+
     if (params.aligner == 'bwa-mem2') {
-        // BWA-MEM2: use pre-built index if available, otherwise build it
+        def usePrebuiltMem2 = false
         if (params.ref_bwa_mem2_indices) {
+            def mem2Path = "${params.ref_bwa_mem2_indices}".trim()
+            usePrebuiltMem2 = dirHasFilesMatching(mem2Path, ~/.+\.(0123|amb|ann|bwt\.2bit\.64|pac)$/)
+            if (!usePrebuiltMem2) {
+                println "WARN: ref_bwa_mem2_indices=${mem2Path} missing or has no index files — running INDEX_BWA_MEM2 (first run can take ~30+ min for GRCh38)."
+            }
+        }
+        if (usePrebuiltMem2) {
             bwa_mem2_indices = Channel.fromPath(
-                "${params.ref_bwa_mem2_indices}/*.{0123,amb,ann,bwt.2bit.64,pac}"
+                "${params.ref_bwa_mem2_indices.toString().trim()}/*.{0123,amb,ann,bwt.2bit.64,pac}"
             ).collect()
         } else {
             INDEX_BWA_MEM2(ref_fasta)
@@ -143,10 +182,17 @@ workflow {
         raw_bam_ch = ALIGN_AND_SORT_BWA_MEM2.out.bam
 
     } else {
-        // BWA-MEM (classic): use pre-built index if available, otherwise build it
+        def usePrebuiltBwa = false
         if (params.ref_bwa_indices) {
+            def bwaPath = "${params.ref_bwa_indices}".trim()
+            usePrebuiltBwa = dirHasFilesMatching(bwaPath, ~/.+\.(amb|ann|bwt|pac|sa)$/)
+            if (!usePrebuiltBwa) {
+                println "WARN: ref_bwa_indices=${bwaPath} missing or has no index files — running INDEX_BWA."
+            }
+        }
+        if (usePrebuiltBwa) {
             bwa_indices = Channel.fromPath(
-                "${params.ref_bwa_indices}/*.{amb,ann,bwt,pac,sa}"
+                "${params.ref_bwa_indices.toString().trim()}/*.{amb,ann,bwt,pac,sa}"
             ).collect()
         } else {
             INDEX_BWA(ref_fasta)
@@ -431,17 +477,6 @@ workflow {
         anno_sum_ch = anno_mm2.sum
     }
 
-    // APOE ε2/ε3/ε4 — before PGx panel HTML so apoe_result.json can be merged into pgx_panel_report.html (PGx review tab)
-    if (runApoe) {
-        apoe_py = Channel.fromPath("${projectDir}/modules/apoe_genotype.py", checkIfExists: true)
-        RUN_APOE(anno_apoe_ch.combine(apoe_py))
-        apoe_json_for_summary = RUN_APOE.out.result_json
-        apoe_review_for_summary = RUN_APOE.out.review_txt
-    } else {
-        apoe_json_for_summary = Channel.fromPath("${projectDir}/modules/apoe_skipped_placeholder.json", checkIfExists: true)
-        apoe_review_for_summary = Channel.fromPath("${projectDir}/modules/apoe_review_skipped.txt", checkIfExists: true)
-    }
-
     if (!skipPgx && params.backbone_bed) {
         pgx_py = Channel.fromPath("${projectDir}/modules/pgx_finalize.py", checkIfExists: true)
 
@@ -466,13 +501,27 @@ workflow {
             .combine(pgx_custom_tsv)
         RUN_PGX_CUSTOM(pgx_custom_input)
 
-        // Combined PGx panel HTML report (PharmCAT + extended panel + APOE review block for proactive health / opt-in)
+        // Combined PGx panel HTML report — base channels (deferred until after APOE block)
         pgx_report_script = Channel.fromPath("${projectDir}/modules/pgx_panel_report.py", checkIfExists: true)
-        pgx_report_input = RUN_PGX_PHARMCAT.out.staged
+        pgx_report_base = RUN_PGX_PHARMCAT.out.staged
             .combine(RUN_PGX_CUSTOM.out.result_json)
             .combine(pgx_report_script)
-            .combine(apoe_json_for_summary)
-        GENERATE_PGX_PANEL_REPORT(pgx_report_input)
+    }
+
+    // APOE ε2/ε3/ε4 — rs429358 + rs7412 (independent of PharmCAT; uses same VCF)
+    if (runApoe) {
+        apoe_py = Channel.fromPath("${projectDir}/modules/apoe_genotype.py", checkIfExists: true)
+        RUN_APOE(anno_apoe_ch.combine(apoe_py))
+        apoe_json_for_summary = RUN_APOE.out.result_json
+        apoe_review_for_summary = RUN_APOE.out.review_txt
+    } else {
+        apoe_json_for_summary = Channel.fromPath("${projectDir}/modules/apoe_skipped_placeholder.json", checkIfExists: true)
+        apoe_review_for_summary = Channel.fromPath("${projectDir}/modules/apoe_review_skipped.txt", checkIfExists: true)
+    }
+
+    // PGx panel report — combine with APOE result (real or placeholder)
+    if (!skipPgx && params.backbone_bed) {
+        GENERATE_PGX_PANEL_REPORT(pgx_report_base.combine(apoe_json_for_summary))
     }
 
     // -------------------------------------------------------
@@ -490,7 +539,6 @@ workflow {
         eh_images_all,
         ref_fasta,
         ref_fai,
-        PREPARE_VIZ_RESOURCES.out.env,
         PREPARE_VIZ_RESOURCES.out.gtf,
         PREPARE_VIZ_RESOURCES.out.gtf_index
     )

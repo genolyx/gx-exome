@@ -8,7 +8,6 @@ process GENERATE_VISUAL_EVIDENCE {
     path eh_images
     path ref_fasta
     path ref_fai
-    path viz_env
     path gtf
     path gtf_idx
     
@@ -18,8 +17,25 @@ process GENERATE_VISUAL_EVIDENCE {
     script:
     """
     # --- Shared Environment Setup ---
-    # Use the pre-built environment passed from PREPARE_VIZ_RESOURCES
-    export PATH=\$PWD/viz_env/bin:\$PATH
+    # Nextflow Docker tasks often get a minimal PATH; do not rely on "python3" on PATH alone.
+    # Resolve the micromamba interpreter by absolute path, then prepend its bin dir for create_report/samtools.
+    PY_BIN=""
+    for _c in /opt/conda/bin/python3 /opt/conda/bin/python; do
+        if [ -x "\$_c" ]; then
+            PY_BIN="\$_c"
+            break
+        fi
+    done
+    if [ -z "\$PY_BIN" ]; then
+        echo "GENERATE_VISUAL_EVIDENCE: no Python found (expected /opt/conda/bin/python3 in gx-exome image)." >&2
+        echo "  This usually means the task container is not the repo Dockerfile image, or /opt is hidden by a bad volume mount." >&2
+        echo "  Host check: docker run --rm gx-exome:latest ls -la /opt/conda/bin/python3" >&2
+        echo "  In-container debug:" >&2
+        ls -la /opt 2>&1 | head -20 >&2 || true
+        ls -la /opt/conda/bin/python3 2>&1 | head -5 >&2 || true
+        exit 127
+    fi
+    export PATH="\$(dirname "\$PY_BIN"):/opt/conda/bin:/usr/local/bin:/usr/bin:\$PATH"
 
     # Symlink Indices
     if [ ! -f "${bam}.bai" ]; then ln -s ${bai} ${bam}.bai; fi
@@ -39,7 +55,7 @@ process GENERATE_VISUAL_EVIDENCE {
     export SMN_START=${params.smn_unified_region_start}
     export PRIMARY_BAM="${bam}"
     export UNIFIED_BAM="${smn_unified_bam}"
-    python3 << 'PYSMN'
+    \$PY_BIN << 'PYSMN'
 import os
 import pysam
 
@@ -124,7 +140,7 @@ with open('fx_image.gff3', 'w') as f:
     
     f.write(f'chrX\\tREViewer\\tTrigger\\t147911600\\t147912450\\t.\\t.\\t.\\tID=FX1;Name=Click to View;Note={encoded_note}\\n')
 EOF
-        python3 create_fx_track.py
+        \$PY_BIN create_fx_track.py
         
         if [ -f "fx_image.gff3" ]; then
             touch fx_track_ready
@@ -257,7 +273,7 @@ with open("track_config.json", "w") as f:
     json.dump(tracks, f, indent=2)
 EOF
 
-    python3 build_config.py
+    \$PY_BIN build_config.py
 
     echo "Generating IGV Report..."
     
@@ -270,7 +286,7 @@ EOF
         --title "Visual Evidence: ${sample_id}"
 
     # --- Alpha thalassemia review note (IGV report footer) ---
-    python3 -c "
+    \$PY_BIN -c "
 html = open('temp_report.html').read()
 alpha_box = '''<div id='alpha_thal_review_note' style='margin-top:24px;padding:16px;border:1px solid #2c5282;border-radius:8px;background:#f0f7ff;max-width:900px;'>
 <h3 style='margin:0 0 8px 0;'>Alpha thalassemia (review)</h3>
@@ -283,7 +299,7 @@ open('temp_report.html', 'w').write(html)
     # --- Fragile X: EH CGG summary + REViewer graph (visible; primary view for repeat count) ---
     export EH_JSON_PATH="${eh_json}"
     export EH_SVG_PATH="\${eh_img:-}"
-    python3 << 'PYFMR1'
+    \$PY_BIN << 'PYFMR1'
 import html as html_mod
 import json
 import os

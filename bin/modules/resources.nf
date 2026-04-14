@@ -1,8 +1,7 @@
 process PREPARE_VIZ_RESOURCES {
     tag "setup_resources"
     label 'local'
-    publishDir "${params.outdir}/resources", mode: 'copy',
-        saveAs: { filename -> filename == "viz_env" ? null : filename }
+    publishDir "${params.outdir}/resources", mode: 'copy'
     errorStrategy 'retry'
     maxRetries 2
 
@@ -11,22 +10,17 @@ process PREPARE_VIZ_RESOURCES {
     path ref_fai
 
     output:
-    path "viz_env",              emit: env
     path "refGene.sorted.gtf.gz",     emit: gtf
     path "refGene.sorted.gtf.gz.tbi", emit: gtf_index
     path "smn_ref_wide.fa",      emit: smn_ref
     path "smn_ref_wide.fa.*",    emit: smn_index
 
     script:
-    // viz 툴이 Docker 이미지에 pre-install 되어 있으므로 viz_env → /opt/conda 심볼릭 링크
     def gtf_provided = params.refgene_gtf ? true : false
     """
     export TMPDIR=\$PWD
 
-    # --- 1. Shared Viz Environment ---
     # igv-reports, pysam, bwa, samtools, tabix are pre-installed in the Docker image (/opt/conda).
-    # viz_env is a symlink so GENERATE_VISUAL_EVIDENCE can use: export PATH=\$PWD/viz_env/bin:\$PATH
-    ln -sf /opt/conda viz_env
     export PATH=/opt/conda/bin:\$PATH
 
     # --- 2. RefSeq GTF ---

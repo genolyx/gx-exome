@@ -32,6 +32,7 @@ Options:
     --skip-pgx                 Skip PharmCAT PGx (default: PGx runs every exome run)
     --proactive-health         Proactive health test: APOE (Alzheimer risk context) is off unless --include-apoe
     --include-apoe             Opt in to APOE (for use with --proactive-health)
+    --nf-live-log              Nextflow live progress dashboard (ANSI); default is off for clean logs
     --shared-ref-dir DIR       Shared reference root (default: /data/reference)
     --fresh                    Delete sample work/ and .nextflow cache, then run (no -resume)
     --panel PANEL              Exome capture panel name (default: twist-exome2)
@@ -91,6 +92,9 @@ BACKBONE_BED=""
 BACKBONE_BED_GZ=""
 BACKBONE_BED_TBI=""
 LIST_PANELS=""
+# Nextflow: default -ansi-log false so nextflow.log / tee / pipeline.log are sequential (no redraw spam).
+# Set --nf-live-log or env GX_EXOME_NF_ANSI_LOG=true for the scrolling process table on a TTY.
+NF_LIVE_LOG=""
 
 require_arg() { [ $# -ge 2 ] && [ -n "$2" ] || { echo -e "${RED}Error: $1 requires a value${NC}"; exit 1; }; }
 
@@ -153,6 +157,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --include-apoe)
             INCLUDE_APOE="true"
+            shift
+            ;;
+        --nf-live-log)
+            NF_LIVE_LOG="1"
             shift
             ;;
         --shared-ref-dir)
@@ -432,6 +440,16 @@ fi
 # 무관하게 항상 Docker 컨테이너가 필요하므로 -profile docker 를 항상 활성화한다.
 NXF_PROFILE="-profile docker"
 
+# Nextflow console: live ANSI dashboard vs sequential log (default sequential — best for nextflow.log / pipeline.log)
+NF_ANSI_LOG_FLAGS="-ansi-log false"
+NXF_ANSI_LOG_VAL="false"
+NXF_ANSI_SUMMARY_VAL="false"
+if [ -n "$NF_LIVE_LOG" ] || [ "${GX_EXOME_NF_ANSI_LOG:-}" = "1" ] || [ "${GX_EXOME_NF_ANSI_LOG:-}" = "true" ]; then
+    NF_ANSI_LOG_FLAGS="-ansi-log true"
+    NXF_ANSI_LOG_VAL="true"
+    NXF_ANSI_SUMMARY_VAL="true"
+fi
+
 # Docker 이미지 확인
 if [ -z "$(docker images -q gx-exome 2>/dev/null)" ]; then
     echo -e "${RED}Error: Docker image 'gx-exome' not found${NC}"
@@ -446,6 +464,11 @@ echo "  Started at: $(pipeline_timestamp)"
 if [ -n "${NEXTFLOW_RESUME}" ]; then
     echo -e "  ${YELLOW}Note:${NC} -resume reuses the Nextflow cache — the console only shows tasks that actually run again."
     echo "        Cached steps are skipped (fast run). Use --fresh to clear work/.nextflow and re-run all steps with full logs."
+fi
+if [ "$NXF_ANSI_LOG_VAL" = "true" ]; then
+    echo -e "  Nextflow log mode: ${YELLOW}live ANSI${NC} (scrolling process table). If you tee to a file, lines may repeat — use default mode or see trace.txt."
+else
+    echo "  Nextflow log mode: sequential (recommended for nextflow.log / pipeline.log). Live table: --nf-live-log or GX_EXOME_NF_ANSI_LOG=true"
 fi
 echo ""
 
@@ -494,19 +517,20 @@ docker run --rm -t --name "$NF_DOCKER_NAME" \
     -e NXF_DATA_DIR="${DATA_DIR}" \
     -e NXF_DOCKER_TASK_USER="${CHOWN_SPEC}" \
     -e HOST_WORK_DIR="${HOST_WORK_DIR}" \
-    -e NXF_ANSI_LOG=true \
-    -e NXF_ANSI_SUMMARY=true \
+    -e NXF_ANSI_LOG=${NXF_ANSI_LOG_VAL} \
+    -e NXF_ANSI_SUMMARY=${NXF_ANSI_SUMMARY_VAL} \
     -e NO_COLOR=1 \
     gx-exome:latest \
     bash -c "
         cd ${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME} && \
         nextflow -log ${DATA_DIR}/log/${WORK_DIR}/${SAMPLE_NAME}/nextflow.log run /app/bin/main.nf \
-            -ansi-log true ${NEXTFLOW_RESUME} ${NXF_PROFILE} \
+            ${NF_ANSI_LOG_FLAGS} ${NEXTFLOW_RESUME} ${NXF_PROFILE} \
             --fastq_dir ${DATA_DIR}/fastq/${WORK_DIR}/${SAMPLE_NAME} \
             --ref_fasta ${DATA_DIR}/data/refs/GRCh38.fasta \
             --ref_fai ${DATA_DIR}/data/refs/GRCh38.fasta.fai \
             --ref_dict ${DATA_DIR}/data/refs/GRCh38.dict \
             --ref_bwa_indices ${DATA_DIR}/data/refs/bwa_index \
+            --ref_bwa_mem2_indices ${DATA_DIR}/data/refs/bwa_mem2_index \
             --backbone_bed ${BACKBONE_BED} \
             --backbone_bed_gz ${BACKBONE_BED_GZ} \
             --backbone_bed_tbi ${BACKBONE_BED_TBI} \
@@ -543,6 +567,8 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo "Results:"
     echo "  Output: ${DATA_DIR}/output/${WORK_DIR}/${SAMPLE_NAME}"
     echo "  Logs: ${DATA_DIR}/log/${WORK_DIR}/${SAMPLE_NAME}"
+    echo "  Per-task summary (one row each, incl. cached): ${DATA_DIR}/log/${WORK_DIR}/${SAMPLE_NAME}/trace.txt"
+    echo "  Full session log: ${DATA_DIR}/log/${WORK_DIR}/${SAMPLE_NAME}/nextflow.log"
     echo ""
 
     # analysis.completed 마커 (FASTQ 가 ro/타 소유면 실패할 수 있음 — 파이프라인 성공과 무관)
