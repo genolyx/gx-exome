@@ -154,6 +154,17 @@ def load_apoe_review_html(apoe_path):
             f'<div class="apoe-review-body"><p>Could not read APOE JSON: {esc(e)}</p></div></div>'
         )
 
+    sid = (d.get("sample_id") or "").strip()
+    igv_para = ""
+    if sid:
+        igv_para = (
+            f'<p class="apoe-igv-wrap">'
+            f'<a class="apoe-igv-btn" href="../snapshots/{esc(sid)}_visual_report.html" '
+            f'target="_blank" rel="noopener">Open IGV visual report (APOE)</a>'
+            f'<span class="apoe-muted"> — region <strong>APOE_rs429358_rs7412</strong> on chr19; '
+            f"primary BAM + SNP landmarks for fragment length / phasing.</span></p>"
+        )
+
     if d.get("status") == "skipped":
         msg = esc(d.get("message", "APOE was not run for this order."))
         return f"""<div class="section apoe-review-section">
@@ -181,6 +192,7 @@ def load_apoe_review_html(apoe_path):
     <p><strong>Genotyping incomplete or non-canonical haplotype.</strong></p>
     <p><code>{err}</code></p>
     {extra}
+    {igv_para}
   </div>
 </div>"""
 
@@ -218,6 +230,7 @@ def load_apoe_review_html(apoe_path):
       {multi}
       <p class="apoe-risk"><strong>Population context:</strong> {risk}</p>
       <p class="apoe-disc">{disc}</p>
+      {igv_para}
       <p class="apoe-muted">Full text: <code>apoe/apoe_review.txt</code> &middot; JSON: <code>apoe/apoe_result.json</code></p>
     </div>
   </div>
@@ -352,6 +365,14 @@ a:hover { text-decoration: underline; }
 .apoe-risk { font-size: 13px; line-height: 1.5; color: #2d3748; margin-top: 12px; }
 .apoe-disc { font-size: 11px; color: #a0aec0; margin-top: 8px; }
 .apoe-msg { font-size: 13px; color: #553c9a; }
+.apoe-igv-wrap { margin: 14px 0 10px 0; line-height: 1.5; }
+.apoe-igv-btn {
+  display: inline-block; padding: 8px 16px; margin-right: 8px;
+  background: #553c9a; color: #fff !important; border-radius: 6px;
+  text-decoration: none !important; font-weight: 600; font-size: 13px;
+  border: 1px solid #44337a;
+}
+.apoe-igv-btn:hover { background: #6b46c1; }
 """
 
 JS = """\

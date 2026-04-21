@@ -511,7 +511,8 @@ workflow {
     // APOE ε2/ε3/ε4 — rs429358 + rs7412 (independent of PharmCAT; uses same VCF)
     if (runApoe) {
         apoe_py = Channel.fromPath("${projectDir}/modules/apoe_genotype.py", checkIfExists: true)
-        RUN_APOE(anno_apoe_ch.combine(apoe_py))
+        apoe_bam_in = anno_apoe_ch.join(bam_ch, by: 0)
+        RUN_APOE(apoe_bam_in.combine(apoe_py))
         apoe_json_for_summary = RUN_APOE.out.result_json
         apoe_review_for_summary = RUN_APOE.out.review_txt
     } else {

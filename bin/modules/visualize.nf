@@ -13,6 +13,7 @@ process GENERATE_VISUAL_EVIDENCE {
     
     output:
     path "*_visual_report.html", emit: snapshots
+    path "*_apoe_igv.html", emit: apoe_igv, optional: true
 
     script:
     """
@@ -47,9 +48,15 @@ process GENERATE_VISUAL_EVIDENCE {
     # Single SMA panel: SMN1 NM_000344 c.840 pileup (GRCh38 ref C vs alt T); ±120 bp around smn_c840_sm1_grch38_1bp
     printf "chr5\\t${params.smn_c840_sm1_grch38_1bp - 120}\\t${params.smn_c840_sm1_grch38_1bp + 120}\\tSMA_SMN1_c840\\n" > regions.bed
     printf "chr16\\t173300\\t173800\\tHb_Constant_Spring\\n" >> regions.bed
+    # APOE — rs429358 + rs7412 (GRCh38); ~138 bp apart; primary BAM shows reads / pairs spanning the locus
+    printf "chr19\\t44908450\\t44909050\\tAPOE_rs429358_rs7412\\n" >> regions.bed
 
     printf '##gff-version 3\\n' > sma_landmarks.gff3
     printf 'chr5\\tgx_exome\\tregion\\t%d\\t%d\\t.\\t+\\t.\\tID=SMN1_c840;Name=NM_000344_c.840_refC_altT\\n' ${params.smn_c840_sm1_grch38_1bp} ${params.smn_c840_sm1_grch38_1bp} >> sma_landmarks.gff3
+
+    printf '##gff-version 3\\n' > apoe_landmarks.gff3
+    printf 'chr19\\tgx_exome\\tsequence_variant\\t44908684\\t44908684\\t.\\t+\\t.\\tID=rs429358;Name=APOE_rs429358\\n' >> apoe_landmarks.gff3
+    printf 'chr19\\tgx_exome\\tsequence_variant\\t44908822\\t44908822\\t.\\t+\\t.\\tID=rs7412;Name=APOE_rs7412\\n' >> apoe_landmarks.gff3
 
     # SMN unified BAM (same bwa-mem2 + mini-ref as SMACA_RUN) → project chr5_local onto hg38 chr5 for IGV
     export SMN_START=${params.smn_unified_region_start}
@@ -195,6 +202,18 @@ tracks.append({
     "displayMode": "EXPANDED",
     "color": "darkgreen",
     "height": 60,
+    "visibilityWindow": -1
+})
+
+# 1c2. APOE — rs429358 + rs7412 (ε2/ε3/ε4); inspect insert size / pairs vs fragment length in primary BAM
+tracks.append({
+    "type": "annotation",
+    "format": "gff3",
+    "url": "apoe_landmarks.gff3",
+    "name": "APOE rs429358 + rs7412 (phasing locus)",
+    "displayMode": "EXPANDED",
+    "color": "#805ad5",
+    "height": 50,
     "visibilityWindow": -1
 })
 
@@ -436,6 +455,112 @@ html_path.write_text(text, encoding="utf-8")
 PYFMR1
 
     mv temp_report.html ${sample_id}_visual_report.html
+
+    # --- APOE Cis/Trans IGV Review (dedicated report) ---
+    printf "chr19\\t44908450\\t44909050\\tAPOE_rs429358_rs7412\\n" > regions_apoe.bed
+
+    cat <<EOF > apoe_track_config.py
+import json
+import os
+
+tracks = []
+tracks.append({
+    "type": "alignment",
+    "format": "bam",
+    "url": "${bam}",
+    "indexURL": "${bam}.bai",
+    "name": "${sample_id} (primary BAM)",
+    "displayMode": "EXPANDED",
+    "colorBy": "base",
+    "height": 600,
+    "minMappingQuality": 0,
+    "samplingDepth": 1000000,
+    "showSoftClips": True,
+    "visibilityWindow": -1
+})
+tracks.append({
+    "type": "annotation",
+    "format": "gff3",
+    "url": "apoe_landmarks.gff3",
+    "name": "APOE rs429358 + rs7412 (cis/trans phasing locus)",
+    "displayMode": "EXPANDED",
+    "color": "#805ad5",
+    "height": 50,
+    "visibilityWindow": -1
+})
+vcf_file = "${vcf}"
+if vcf_file and vcf_file != "null" and os.path.exists(vcf_file):
+    idx = vcf_file + ".tbi"
+    if not os.path.exists(idx):
+        try:
+            os.symlink("${vcf_idx}", idx)
+        except FileExistsError:
+            pass
+    tracks.append({
+        "type": "variant",
+        "format": "vcf",
+        "url": vcf_file,
+        "indexURL": idx,
+        "name": "Called Variants",
+        "displayMode": "SQUISHED",
+        "color": "purple",
+        "visibilityWindow": -1
+    })
+tracks.append({
+    "type": "annotation",
+    "format": "gtf",
+    "url": "refGene.gtf.gz",
+    "indexURL": "refGene.gtf.gz.tbi",
+    "name": "RefSeq Genes",
+    "displayMode": "EXPANDED",
+    "visibilityWindow": -1
+})
+with open("apoe_track_config.json", "w") as f:
+    json.dump(tracks, f, indent=2)
+EOF
+    \$PY_BIN apoe_track_config.py
+
+    echo "Generating APOE cis/trans IGV report..."
+    create_report regions_apoe.bed \\
+        --fasta ${ref_fasta} \\
+        --genome hg38 \\
+        --track-config apoe_track_config.json \\
+        --flanking 500 \\
+        --output ${sample_id}_apoe_igv.html \\
+        --title "APOE Cis/Trans Review: ${sample_id}"
+
+    export APOE_IGV_HTML="${sample_id}_apoe_igv.html"
+    \$PY_BIN << 'PYAPOE_BANNER'
+import os
+import re
+from pathlib import Path
+
+path = os.environ["APOE_IGV_HTML"]
+if Path(path).exists():
+    html = Path(path).read_text(encoding="utf-8", errors="replace")
+    guidance = (
+        '<div style="margin:0;padding:16px 24px;background:linear-gradient(135deg,#f5f0ff,#ede9fe);'
+        'border-bottom:2px solid #805ad5;">'
+        '<h2 style="margin:0 0 8px 0;color:#553c9a;font-size:18px;">APOE Cis/Trans Review</h2>'
+        '<p style="margin:0 0 6px 0;color:#4a5568;font-size:13px;line-height:1.5;">'
+        '<strong>Purpose:</strong> Determine if rs429358 and rs7412 are on the same chromosome '
+        '(cis) or opposite chromosomes (trans). Cis/trans phasing resolves the APOE diplotype '
+        '&mdash; particularly &epsilon;2/&epsilon;4 vs &epsilon;3/&epsilon;3, which are genotypically '
+        'identical when unphased.</p>'
+        '<p style="margin:0;color:#4a5568;font-size:13px;line-height:1.5;">'
+        '<strong>How to review:</strong> Inspect read pairs and spanning reads covering both variant '
+        'positions (~138 bp apart). If a single read or mate pair carries both variant alleles on the '
+        'same molecule, they are in <strong>cis</strong> (same chromosome). Color by base is enabled '
+        '&mdash; mismatches to reference are highlighted. Sort alignment by insert size to group '
+        'fragment-length evidence.</p></div>'
+    )
+    m = re.search(r'(<body[^>]*>)', html, re.I)
+    if m:
+        html = html[:m.end()] + guidance + html[m.end():]
+    else:
+        html = guidance + html
+    Path(path).write_text(html, encoding="utf-8")
+PYAPOE_BANNER
 
     # Verify output
     if [ ! -f "${sample_id}_visual_report.html" ]; then

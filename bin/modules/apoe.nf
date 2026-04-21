@@ -11,7 +11,7 @@ process RUN_APOE {
     publishDir "${params.outdir}/apoe", mode: 'copy'
 
     input:
-    tuple val(sample_id), path(vcf), path(tbi), path(apoe_py)
+    tuple val(sample_id), path(vcf), path(tbi), path(bam), path(bai), path(apoe_py)
 
     output:
     path "apoe_result.json", emit: result_json
@@ -27,6 +27,7 @@ process RUN_APOE {
 
     python3 ${apoe_py} \\
         --vcf "${vcf}" \\
+        --bam "${bam}" \\
         --sample-id "${sample_id}" \\
         --json-out apoe_result.json \\
         --summary-out apoe_summary.txt \\

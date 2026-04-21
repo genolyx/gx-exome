@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+from collections import Counter
 from itertools import product
 from typing import Any
 
@@ -120,6 +122,211 @@ def _enumerate_diplotypes(
     return sorted(valid, key=lambda p: (_iso_sort_key(p[0]), _iso_sort_key(p[1])))
 
 
+def _base_at_ref_pos(read: Any, ref_pos_1based: int) -> str | None:
+    """Aligned base at reference position (1-based, GRCh38). None if not covered."""
+    if read.is_unmapped or read.is_secondary or read.is_supplementary:
+        return None
+    seq = read.query_sequence
+    if not seq:
+        return None
+    target = ref_pos_1based - 1
+    for qpos, rpos in read.get_aligned_pairs(matches_only=True):
+        if rpos == target:
+            if qpos is None:
+                return None
+            return seq[qpos].upper()
+    return None
+
+
+def collect_apoe_read_evidence(
+    bam_path: str,
+    chrom: str,
+    pos429: int,
+    pos7412: int,
+) -> dict[str, Any]:
+    """
+    Infer cis haplotypes from primary BAM: (1) single reads spanning both SNPs (~138 bp apart),
+    (2) paired mates where one read covers rs429358 and the other rs7412 (fragment / insert size
+    is the molecule length — use IGV to inspect pairs and soft-clips at the locus).
+    """
+    try:
+        import pysam
+    except ImportError:
+        return {"error": "pysam_not_installed", "fragments": []}
+
+    chrom = _norm_chrom(chrom)
+    lo = min(pos429, pos7412) - 80
+    hi = max(pos429, pos7412) + 80
+
+    fragments: list[dict[str, Any]] = []
+    by_q: dict[str, list[Any]] = {}
+    try:
+        bam = pysam.AlignmentFile(bam_path, "rb")
+    except OSError as e:
+        return {"error": f"bam_open:{e}", "fragments": []}
+
+    try:
+        for read in bam.fetch(chrom, max(0, lo - 1), hi):
+            if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                continue
+            qn = read.query_name
+            if not qn:
+                continue
+            by_q.setdefault(qn, []).append(read)
+    finally:
+        bam.close()
+
+    for qname, reads in by_q.items():
+        b429: str | None = None
+        b7412: str | None = None
+        frag_len: int | None = None
+        mode = "unknown"
+
+        for r in reads:
+            x = _base_at_ref_pos(r, pos429)
+            y = _base_at_ref_pos(r, pos7412)
+            if x is not None:
+                b429 = x
+            if y is not None:
+                b7412 = y
+            tl = r.template_length
+            if tl and tl != 0:
+                frag_len = abs(int(tl))
+
+        if b429 is None or b7412 is None:
+            continue
+
+        spanning = any(
+            _base_at_ref_pos(r, pos429) is not None and _base_at_ref_pos(r, pos7412) is not None
+            for r in reads
+        )
+        if spanning:
+            mode = "spanning_read"
+            r0 = next(
+                r
+                for r in reads
+                if _base_at_ref_pos(r, pos429) is not None and _base_at_ref_pos(r, pos7412) is not None
+            )
+            if frag_len is None:
+                frag_len = int(r0.query_alignment_length) if r0.query_alignment_length else None
+        else:
+            mode = "paired_or_split"
+            for r in reads:
+                tl = r.template_length
+                if tl and tl != 0:
+                    frag_len = abs(int(tl))
+                    break
+
+        iso = _haplotype_from_chr(b429, b7412)
+        fragments.append(
+            {
+                "read_name": qname,
+                "mode": mode,
+                "bases_rs429358": b429,
+                "bases_rs7412": b7412,
+                "haplotype": iso,
+                "fragment_length_bp": frag_len,
+            }
+        )
+
+    valid = [f for f in fragments if f.get("haplotype")]
+    invalid = [f for f in fragments if not f.get("haplotype")]
+    h_list = [f["haplotype"] for f in valid]
+    ctr = Counter(h_list)
+
+    resolved_pair: tuple[str, str] | None = None
+    confidence = "insufficient"
+    n = len(valid)
+    if n >= 3:
+        if len(ctr) == 1:
+            h = next(iter(ctr))
+            resolved_pair = (h, h)
+            confidence = "high" if n >= 8 else "moderate"
+        elif len(ctr) == 2:
+            (h1, n1), (h2, n2) = ctr.most_common(2)
+            if n1 >= 2 and n2 >= 2:
+                resolved_pair = tuple(sorted([h1, h2], key=_iso_sort_key))
+                confidence = "high" if n >= 10 else "moderate"
+            elif n >= 6:
+                resolved_pair = tuple(sorted([h1, h2], key=_iso_sort_key))
+                confidence = "moderate"
+        elif len(ctr) > 2:
+            confidence = "low_mixed_haplotypes"
+
+    out_ev: dict[str, Any] = {
+        "bam_window_grch38": f"{chrom}:{lo}-{hi}",
+        "snps_bp_apart": abs(pos7412 - pos429),
+        "fragments_total": len(fragments),
+        "fragments_with_canonical_haplotype": len(valid),
+        "haplotype_counts": dict(ctr),
+        "fragments_detail": fragments[:200],
+        "fragments_invalid_canonical": len(invalid),
+        "resolved_diplotype_from_reads": list(resolved_pair) if resolved_pair else None,
+        "read_resolution_confidence": confidence,
+        "igv_note": (
+            "Open the APOE panel in the visual report: sort alignment track by insert size in IGV.js "
+            "or view read pairs; fragment_length_bp is |ISIZE| when available (paired ends), else spanning alignment length."
+        ),
+    }
+    if invalid:
+        out_ev["note_invalid"] = (
+            "Some fragments do not match ε2/ε3/ε4 base patterns (rare recombinant, error, or misalignment)."
+        )
+    return out_ev
+
+
+def _merge_read_evidence(
+    out: dict[str, Any],
+    bam_path: str | None,
+    diplotypes_vcf: list[tuple[str, str]],
+) -> None:
+    if not bam_path or not os.path.isfile(bam_path):
+        return
+    c1, p1, _, _ = RS429358
+    c2, p2, _, _ = RS7412
+    ev = collect_apoe_read_evidence(bam_path, c1, p1, p2)
+    out["read_evidence"] = ev
+    if ev.get("error"):
+        return
+
+    rp = ev.get("resolved_diplotype_from_reads")
+    conf = ev.get("read_resolution_confidence") or ""
+    if not rp or len(rp) != 2:
+        return
+    pair = tuple(sorted([rp[0], rp[1]], key=_iso_sort_key))
+
+    vcf_pairs_sorted = {tuple(sorted(list(p), key=_iso_sort_key)) for p in diplotypes_vcf}
+    if pair not in vcf_pairs_sorted:
+        out["read_vcf_tension"] = (
+            f"Read-backed diplotype {pair[0]}/{pair[1]} is not among VCF-allowed isoform pairs; "
+            "do not override VCF — investigate alignment or contamination."
+        )
+        return
+
+    if len(vcf_pairs_sorted) == 1 and pair in vcf_pairs_sorted:
+        out["read_evidence_note"] = (
+            f"Read evidence consistent with VCF diplotype (confidence: {conf}). "
+            "Use IGV APOE panel to review fragment lengths and pair support."
+        )
+        return
+
+    if conf not in ("high", "moderate"):
+        return
+
+    if out.get("phasing") == "phased":
+        out["read_evidence_note"] = "VCF already phased; read evidence listed for QC / IGV."
+        return
+
+    out["phasing"] = "read_backed"
+    out["diplotypes_possible"] = [list(pair)]
+    out["diplotype_display"] = f"{pair[0]}/{pair[1]}"
+    out["risk_context"] = _risk_note([pair], resolved=True)
+    out["read_evidence_note"] = (
+        f"Diplotype resolved from primary BAM read linkage (confidence: {conf}). "
+        "Confirm in IGV on the APOE panel (fragment lengths and pair orientation)."
+    )
+
+
 def _risk_note(diplotypes: list[tuple[str, str]], resolved: bool) -> str:
     if not diplotypes:
         return "Could not resolve APOE isoforms from genotypes."
@@ -144,7 +351,7 @@ def _risk_note(diplotypes: list[tuple[str, str]], resolved: bool) -> str:
     return " ".join(lines)
 
 
-def run(vcf_path: str, sample_id: str) -> dict[str, Any]:
+def run(vcf_path: str, sample_id: str, bam_path: str | None = None) -> dict[str, Any]:
     c1, p1, r1, a1 = RS429358
     c2, p2, r2, a2 = RS7412
 
@@ -193,6 +400,7 @@ def run(vcf_path: str, sample_id: str) -> dict[str, Any]:
             out["diplotypes_possible"] = [list(pair)]
             out["diplotype_display"] = f"{pair[0]}/{pair[1]}"
             out["risk_context"] = _risk_note([pair], resolved=True)
+            _merge_read_evidence(out, bam_path, [pair])
             return out
         out["phasing_note"] = (
             "VCF marked phased but rs429358/rs7412 pair does not match canonical ε2/ε3/ε4; "
@@ -227,6 +435,7 @@ def run(vcf_path: str, sample_id: str) -> dict[str, Any]:
     out["diplotypes_possible"] = [list(p) for p in diplotypes]
     out["diplotype_display"] = displays[0] if resolved else " OR ".join(displays)
     out["risk_context"] = _risk_note(diplotypes, resolved=resolved)
+    _merge_read_evidence(out, bam_path, diplotypes)
     return out
 
 
@@ -256,6 +465,16 @@ def write_summary(path: str, data: dict[str, Any]) -> None:
                 lines.append(f"  — {'/'.join(p)}")
         lines.append("")
         lines.append(data.get("risk_context", ""))
+        if data.get("read_evidence") and isinstance(data["read_evidence"], dict):
+            re = data["read_evidence"]
+            if not re.get("error"):
+                lines.append("")
+                lines.append(
+                    f"Read evidence: {re.get('fragments_with_canonical_haplotype', 0)} fragments; "
+                    f"counts {re.get('haplotype_counts', {})}; IGV → APOE panel in visual report."
+                )
+                if data.get("read_evidence_note"):
+                    lines.append(data["read_evidence_note"])
     lines.append("")
     lines.append(data.get("disclaimer", ""))
     lines.append("")
@@ -313,6 +532,22 @@ def write_review(path: str, data: dict[str, Any]) -> None:
                 lines.append(f"    • {'/'.join(p)}")
         if data.get("phasing_note"):
             lines.append(f"  Note: {data['phasing_note']}")
+        rev = data.get("read_evidence")
+        if isinstance(rev, dict) and not rev.get("error"):
+            lines.append("")
+            lines.append("  Read-level phasing (primary BAM):")
+            lines.append(f"    Window: {rev.get('bam_window_grch38', '—')}")
+            lines.append(f"    SNPs apart: {rev.get('snps_bp_apart', '—')} bp")
+            lines.append(
+                f"    Fragments with canonical haplotype: {rev.get('fragments_with_canonical_haplotype', 0)} / {rev.get('fragments_total', 0)}"
+            )
+            lines.append(f"    Haplotype counts: {rev.get('haplotype_counts', {})}")
+            if rev.get("resolved_diplotype_from_reads"):
+                lines.append(f"    Resolved from reads: {'/'.join(rev['resolved_diplotype_from_reads'])} ({rev.get('read_resolution_confidence', '')})")
+            if data.get("read_evidence_note"):
+                lines.append(f"    {data['read_evidence_note']}")
+            if data.get("read_vcf_tension"):
+                lines.append(f"    Tension: {data['read_vcf_tension']}")
 
     lines.extend(["", "—" * 78, "3. INTERPRETATION (population risk, not diagnosis)", "—" * 78])
     if st == "ok":
@@ -327,8 +562,21 @@ def write_review(path: str, data: dict[str, Any]) -> None:
         "—" * 78,
         "5. METHOD",
         "—" * 78,
-        "  Isoforms inferred from exome VCF genotypes at rs429358 and rs7412 (cis rules for ε2/ε3/ε4).",
+        "  Isoforms inferred from exome VCF genotypes at rs429358 and rs7412 (cis rules for ε2/ε3/ε4);",
+        "  optional read-backed phasing from primary BAM (spanning reads and mate pairs).",
         "  Not a substitute for clinical-grade assays when required.",
+        "",
+        "—" * 78,
+        "6. IGV VISUAL EVIDENCE",
+        "—" * 78,
+    ])
+    _sid = data.get("sample_id") or ""
+    if _sid:
+        lines.append(f"  Embedded report: snapshots/{_sid}_visual_report.html  (relative to order output)")
+        lines.append("  Region name: APOE_rs429358_rs7412 (chr19) — primary BAM + SNP landmarks; review fragment length / pair support.")
+    else:
+        lines.append("  (No sample_id in JSON — link to snapshots/<sample>_visual_report.html manually.)")
+    lines.extend([
         "",
         f"Machine-readable: apoe/apoe_result.json",
         "=" * 78,
@@ -345,9 +593,10 @@ def main() -> None:
     p.add_argument("--json-out", default="apoe_result.json")
     p.add_argument("--summary-out", default="apoe_summary.txt")
     p.add_argument("--review-out", default="apoe_review.txt")
+    p.add_argument("--bam", default=None, help="Primary BAM for read-backed phasing + fragment evidence")
     args = p.parse_args()
 
-    data = run(args.vcf, args.sample_id)
+    data = run(args.vcf, args.sample_id, bam_path=args.bam)
     with open(args.json_out, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.write("\n")
