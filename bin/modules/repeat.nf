@@ -109,5 +109,21 @@ process EXPANSION_HUNTER {
         echo "FMR1 not found in VCF, skipping visualization."
     fi
 
+    # 3. CFTR intron 9 poly-TG / poly-T tract (carrier screening: 5T/7T/9T x TG11/12/13).
+    # EH preserves per-allele order across both VariantIds in the CFTR_IVS9 locus,
+    # so REPCN columns can be combined into haplotypes downstream in summary.nf.
+    if grep -qE "CFTR_TG|CFTR_polyT" ${sample_id}_eh.vcf; then
+        echo "Generating REViewer visualization for CFTR_IVS9..."
+        ./REViewer \\
+            --reads ${sample_id}_eh_realigned.sorted.bam \\
+            --vcf ${sample_id}_eh.vcf \\
+            --reference ${ref_fasta} \\
+            --catalog ${variant_catalog} \\
+            --locus CFTR_IVS9 \\
+            --output-prefix ${sample_id}_CFTR_IVS9 || echo "WARN: REViewer failed on CFTR_IVS9 (continuing)."
+    else
+        echo "CFTR_IVS9 not found in VCF, skipping visualization."
+    fi
+
     """
 }

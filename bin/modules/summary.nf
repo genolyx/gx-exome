@@ -475,32 +475,102 @@ def read_cyp21_fallback_text(files):
             results[sample] = []
     return results
 
+def _parse_eh_repids(path):
+    # Returns dict { REPID -> REPCN string } for one EH VCF.
+    out = {}
+    try:
+        with open(path) as vcf:
+            for line in vcf:
+                if line.startswith('#'):
+                    continue
+                parts = line.split('\\t')
+                if len(parts) < 10:
+                    continue
+                info = parts[7]
+                fmt_keys = parts[8].split(':')
+                fmt_vals = parts[9].strip().split(':')
+                m = re.search(r'REPID=([^;]+)', info)
+                if not m:
+                    continue
+                rid = m.group(1)
+                if 'REPCN' in fmt_keys:
+                    out[rid] = fmt_vals[fmt_keys.index('REPCN')]
+                else:
+                    out[rid] = '.'
+    except Exception:
+        return None
+    return out
+
 def parse_eh(files):
+    # FragileX(FMR1) summary cell. CFTR is reported separately via parse_eh_cftr().
     results = {}
     for f in files:
         sample = os.path.basename(f).replace('_eh.vcf', '')
-        try:
-            summary = []
-            with open(f) as vcf:
-                for line in vcf:
-                    if line.startswith('#'): continue
-                    parts = line.split('\\t')
-                    if len(parts) >= 10:
-                        info = parts[7]
-                        fmt_keys = parts[8].split(':')
-                        fmt_vals = parts[9].strip().split(':')
-                        
-                        repid_match = re.search(r'REPID=([^;]+)', info)
-                        if repid_match:
-                            gene = repid_match.group(1)
-                            if 'REPCN' in fmt_keys:
-                                idx = fmt_keys.index('REPCN')
-                                cn = fmt_vals[idx]
-                                summary.append(f"{gene}:{cn}")
-            results[sample] = " | ".join(summary) if summary else "Ref"
-        except:
+        rep = _parse_eh_repids(f)
+        if rep is None:
             results[sample] = "Error"
+            continue
+        if 'FMR1' in rep:
+            results[sample] = f"FMR1:{rep['FMR1']}"
+        else:
+            results[sample] = "Ref"
     return results
+
+# CFTR intron 9 (legacy intron 8) poly-TG + poly-T tract — splicing modifier
+# critical for CF carrier screening (5T variably penetrant in cis with TG12/TG13).
+# References: Cuppens 1998 (J Clin Invest 101:487), Groman 2004 (Am J Hum Genet 74:176),
+# CFF/ACMG carrier-screen guidance.
+def cftr_haplotype_risk(tg, pt):
+    # Per-allele clinical flag for the (TG)m-(T)n haplotype.
+    if pt in (7, 9):
+        return "BENIGN"
+    if pt == 5:
+        if tg >= 13:
+            return f"5T-TG{tg}: HIGH-RISK (CFTR-RD/CBAVD)"
+        if tg == 12:
+            return f"5T-TG{tg}: LOW-MOD risk"
+        return f"5T-TG{tg}: typically benign"
+    return f"polyT={pt}: review"
+
+def parse_eh_cftr(files):
+    # Returns dict: sample -> {'tg': REPCN, 'pt': REPCN, 'call': human-readable}.
+    results = {}
+    for f in files:
+        sample = os.path.basename(f).replace('_eh.vcf', '')
+        rep = _parse_eh_repids(f)
+        if rep is None:
+            results[sample] = {'tg': None, 'pt': None, 'call': 'Error'}
+            continue
+        tg = rep.get('CFTR_TG')
+        pt = rep.get('CFTR_polyT')
+        if not tg or not pt:
+            results[sample] = {'tg': tg, 'pt': pt, 'call': 'No Data'}
+            continue
+        # EH writes REPCN as 'a/b' (diploid) or single int (haploid). CFTR is autosomal → diploid.
+        tg_alleles = tg.split('/')
+        pt_alleles = pt.split('/')
+        if len(tg_alleles) != len(pt_alleles):
+            results[sample] = {'tg': tg, 'pt': pt, 'call': f'PARSE_ERROR(TG={tg};T={pt})'}
+            continue
+        haps = []
+        for i in range(len(tg_alleles)):
+            try:
+                tg_n = int(tg_alleles[i])
+                pt_n = int(pt_alleles[i])
+            except ValueError:
+                haps.append(f"(TG){tg_alleles[i]}-{pt_alleles[i]}T:UNK")
+                continue
+            haps.append(f"(TG){tg_n}-{pt_n}T [{cftr_haplotype_risk(tg_n, pt_n)}]")
+        results[sample] = {'tg': tg, 'pt': pt, 'call': ' | '.join(haps)}
+    return results
+
+def cftr_summary_cell(cftr_entry):
+    # Compact single-cell rendering for the carrier-screening summary table.
+    if not cftr_entry or cftr_entry.get('call') in (None, 'Error', 'No Data'):
+        return cftr_entry.get('call', '-') if cftr_entry else '-'
+    tg = cftr_entry.get('tg') or '?'
+    pt = cftr_entry.get('pt') or '?'
+    return f"TG={tg};T={pt} → {cftr_entry['call']}"
 
 def filter_smaca_for_detailed_report(line):
     # Detailed report: keep CN/SMAca + HGVS norm (G→C, A→T); drop verbose per-base ACGT.
@@ -831,6 +901,7 @@ hotspot_pileup_by_sample = parse_cyp21_hotspot_pileup_rows(cyp21_hotspot_pileup_
 cyp_fallback_raw = read_cyp21_fallback_text(cyp_files)
 c_res = parse_fallback(cyp_files, "cyp21a2")
 e_res = parse_eh(eh_files)
+cftr_res = parse_eh_cftr(eh_files)
 s_res, smaca_extras = parse_smaca(sma_files)
 v_res = parse_intron_verify(ver_files)
 
@@ -857,7 +928,7 @@ if _apoe_sid and apoe_data.get("status") != "skipped":
     all_samples = sorted(_apoe_set)
 
 # Generate Individual Reports
-header = "Sample\\tParaphase(SMN/GBA)\\tSMAca\\tFragileX(FMR1)\\tHBA_Ratio\\tCYP21A2_Ratio\\tLarge_SVs(Manta/GCNV)\\tQC_Warnings\\tAPOE(ε2/ε3/ε4)"
+header = "Sample\\tParaphase(SMN/GBA)\\tSMAca\\tFragileX(FMR1)\\tCFTR_IVS9(TG-polyT)\\tHBA_Ratio\\tCYP21A2_Ratio\\tLarge_SVs(Manta/GCNV)\\tQC_Warnings\\tAPOE(ε2/ε3/ε4)"
 
 for s in all_samples:
     # 1. Individual Summary Report
@@ -883,7 +954,8 @@ for s in all_samples:
 
         cyp_full = f"{c_res.get(s, '-')}|NM000500_hotspots={hotspot_compact_summary(hotspot_by_sample.get(s), bool(hotspot_defs))}"
         apoe_cell = apoe_summary_cell(s, apoe_data)
-        line = f"{s}\\t{p_res.get(s, '-')}\\t{s_res.get(s, '-')}\\t{e_res.get(s, '-')}\\t{h_res.get(s, '-')}\\t{cyp_full}\\t{sv_str}\\t{warn_str}\\t{apoe_cell}"
+        cftr_cell = cftr_summary_cell(cftr_res.get(s))
+        line = f"{s}\\t{p_res.get(s, '-')}\\t{s_res.get(s, '-')}\\t{e_res.get(s, '-')}\\t{cftr_cell}\\t{h_res.get(s, '-')}\\t{cyp_full}\\t{sv_str}\\t{warn_str}\\t{apoe_cell}"
         out.write(line + "\\n")
 
     # 2. Individual Detailed Report
@@ -967,6 +1039,25 @@ for s in all_samples:
 
         out.write("EXPANSION HUNTER (Fragile X / FMR1):\\n")
         out.write(f"  {e_res.get(s, 'No Data')}\\n\\n")
+
+        # CFTR intron 9 poly-TG / poly-T tract — splicing modifier (CF carrier screening).
+        out.write("CFTR INTRON 9 POLY-TG / POLY-T TRACT (carrier screening, splicing modifier):\\n")
+        out.write("  Locus: chr7:117,548,607-117,548,635 (GRCh38) — reference is (TG)11(T)7.\\n")
+        out.write("  EH locus 'CFTR_IVS9' uses two adjacent variants (CFTR_TG, CFTR_polyT); EH preserves\\n")
+        out.write("  per-allele order across both, so REPCN columns combine into per-allele haplotypes.\\n")
+        out.write("  Clinical context (Cuppens 1998; Groman 2004; CFF/ACMG):\\n")
+        out.write("    - 9T / 7T            : benign (most common)\\n")
+        out.write("    - 5T-(TG)11          : usually benign\\n")
+        out.write("    - 5T-(TG)12          : low-moderate penetrance for CFTR-RD/CBAVD\\n")
+        out.write("    - 5T-(TG)13          : high penetrance for CFTR-RD/CBAVD\\n")
+        _cftr = cftr_res.get(s, {})
+        _tg = _cftr.get('tg') if _cftr else None
+        _pt = _cftr.get('pt') if _cftr else None
+        _call = _cftr.get('call', 'No Data') if _cftr else 'No Data'
+        out.write(f"  Raw EH REPCN  : CFTR_TG={_tg if _tg else '-'}  CFTR_polyT={_pt if _pt else '-'}\\n")
+        out.write(f"  Per-allele    : {_call}\\n")
+        out.write("  Visual evidence (if generated): repeat/{sample}_CFTR_IVS9*.svg (REViewer read graph).\\n".replace("{sample}", s))
+        out.write("\\n")
 
         out.write("APOE REVIEW (Alzheimer risk — ε2 / ε3 / ε4):\\n")
         out.write("  Standalone file (same content): apoe/apoe_review.txt next to this order's outputs\\n")
