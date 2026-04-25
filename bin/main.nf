@@ -26,6 +26,9 @@ include { INDEX_BWA; ALIGN_AND_SORT;
           INDEX_BWA_MEM2; ALIGN_AND_SORT_BWA_MEM2;
           MARK_DUPLICATES; SAMTOOLS_BAM_STATS } from './modules/align'
 
+// SSD scratch lifecycle (activated by --use-ssd / params.use_ssd)
+include { SCRATCH_SETUP; SCRATCH_MOVE_FINAL } from './modules/scratch'
+
 // Variant Calling — three callers
 include { CALL_VARIANTS_GATK;
           CALL_VARIANTS_DEEPVARIANT;
@@ -82,12 +85,16 @@ workflow {
     def mosdepthPerBaseOn = !java.lang.Boolean.parseBoolean(
         params.skip_mosdepth_per_base != null ? params.skip_mosdepth_per_base.toString() : 'false'
     )
+    def useSsd = java.lang.Boolean.parseBoolean(
+        params.use_ssd != null ? params.use_ssd.toString() : 'false'
+    )
     println "=" * 60
     println "GX-Exome Pipeline"
     println "  Aligner        : ${params.aligner}"
     println "  Variant Caller : ${params.variant_caller}"
     println "  VEP Annotation : ${params.skip_vep ? 'SKIPPED' : 'ENABLED'}"
     println "  MOSDEPTH per-base (qc/, daemon gene coverage): ${mosdepthPerBaseOn ? 'ENABLED' : 'SKIPPED (skip_mosdepth_per_base)'}"
+    println "  SSD Scratch    : ${useSsd ? 'ENABLED  scratch=' + params.scratch_dir + '  cleanup=true' : 'DISABLED (HDD workDir)'}"
     def skipPgx = java.lang.Boolean.parseBoolean(
         params.skip_pgx != null ? params.skip_pgx.toString() : 'false'
     )
@@ -145,6 +152,23 @@ workflow {
     // 0. Prepare Shared Visualization Resources
     // -------------------------------------------------------
     PREPARE_VIZ_RESOURCES(ref_fasta, ref_fai)
+
+    // -------------------------------------------------------
+    // SSD Scratch setup (when --use-ssd)
+    // SCRATCH_SETUP validates the SSD dir and emits a barrier
+    // channel so alignment only starts after setup succeeds.
+    // -------------------------------------------------------
+    if (useSsd) {
+        SCRATCH_SETUP(
+            Channel.value(params.sample_name as String ?: 'gx_exome_sample'),
+            Channel.value(params.scratch_dir as String)
+        )
+        // Cross-join fastq_ch with the single scratch_dir signal → creates
+        // a data dependency so ALIGN starts only after SCRATCH_SETUP.
+        fastq_ch = fastq_ch
+            .combine(SCRATCH_SETUP.out.scratch_dir)
+            .map { sid, reads, _sd -> tuple(sid, reads) }
+    }
 
     // -------------------------------------------------------
     // 1. Alignment — BWA-MEM or BWA-MEM2
@@ -206,8 +230,20 @@ workflow {
     MARK_DUPLICATES(raw_bam_ch)
     SAMTOOLS_BAM_STATS(MARK_DUPLICATES.out.bam)
 
-    // Use MarkDuplicated BAM for all downstream processes
-    bam_ch = MARK_DUPLICATES.out.bam
+    // SSD: relay final .md.bam through SCRATCH_MOVE_FINAL to log SSD usage
+    // and expose a clean channel boundary between alignment (SSD) and the
+    // remaining pipeline.  publishDir 'copy' inside MARK_DUPLICATES already
+    // wrote the HDD copy; this process only creates symlinks + logging.
+    if (useSsd) {
+        SCRATCH_MOVE_FINAL(
+            MARK_DUPLICATES.out.bam,
+            Channel.value(params.scratch_dir as String)
+        )
+        bam_ch = SCRATCH_MOVE_FINAL.out.bam
+    } else {
+        // Use MarkDuplicated BAM for all downstream processes
+        bam_ch = MARK_DUPLICATES.out.bam
+    }
 
     // mosdepth per-base + tabix under qc/ (service-daemon gene coverage); optional *_gene_coverage.tsv
     if (mosdepthPerBaseOn) {
@@ -724,6 +760,32 @@ MARKER
             println "     To cleanup: rm -rf ${params.outdir}"
         }
         println "-" * 60 + "\n"
+    }
+
+    // -------------------------------------------------------
+    // SSD scratch cleanup
+    //   Success + ssd_scratch profile: workDir already removed by cleanup=true.
+    //     Scratch root may still exist if it contained other files → remove.
+    //   Failure: cleanup=true does NOT run on failed pipelines in Nextflow,
+    //     so we explicitly remove the SSD work dir here to reclaim space.
+    // -------------------------------------------------------
+    if (params.use_ssd) {
+        def scratchPath = params.scratch_dir as String
+        if (!workflow.success) {
+            println "[SSD] Pipeline failed — removing scratch to reclaim SSD space: ${scratchPath}"
+            try {
+                def proc = ["bash", "-c", "rm -rf '${scratchPath}' 2>/dev/null || true"].execute()
+                proc.waitFor()
+                println "[SSD] Scratch cleanup complete"
+            } catch (Exception e) {
+                println "[SSD] Scratch cleanup warning (manual rm may be needed): ${e.message}"
+                println "      rm -rf '${scratchPath}'"
+            }
+        } else if (!params.cleanup) {
+            // cleanup=false + use_ssd (non-ssd_scratch profile edge case)
+            println "[SSD] Note: scratch preserved for potential -resume: ${scratchPath}"
+            println "     Remove with: rm -rf '${scratchPath}'"
+        }
     }
 
     println ""

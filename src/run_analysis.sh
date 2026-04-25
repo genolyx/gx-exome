@@ -35,6 +35,11 @@ Options:
     --nf-live-log              Nextflow live progress dashboard (ANSI); default is off for clean logs
     --shared-ref-dir DIR       Shared reference root (default: /data/reference)
     --fresh                    Delete sample work/ and .nextflow cache, then run (no -resume)
+    --use-ssd                  Route alignment workDir to SSD for faster BAM I/O
+                               Enables ssd_scratch profile: cleanup=true (disables -resume)
+                               Use --scratch-dir to specify SSD path (default: /tmp/gx_scratch)
+    --scratch-dir DIR          SSD scratch root directory (default: /tmp/gx_scratch)
+                               Must be on a fast local SSD/NVMe; ~150 GB free recommended
     --panel PANEL              Exome capture panel name (default: twist-exome2)
                                Built-in: twist-exome2
                                Custom:   <data-dir>/data/bed/<PANEL>/targets.bed{,.gz,.gz.tbi}
@@ -92,6 +97,9 @@ BACKBONE_BED=""
 BACKBONE_BED_GZ=""
 BACKBONE_BED_TBI=""
 LIST_PANELS=""
+# SSD scratch acceleration
+USE_SSD=""
+SCRATCH_DIR="/tmp/gx_scratch"
 # Nextflow: default -ansi-log false so nextflow.log / tee / pipeline.log are sequential (no redraw spam).
 # Set --nf-live-log or env GX_EXOME_NF_ANSI_LOG=true for the scrolling process table on a TTY.
 NF_LIVE_LOG=""
@@ -185,6 +193,15 @@ while [[ $# -gt 0 ]]; do
         --list-panels)
             LIST_PANELS="1"
             shift
+            ;;
+        --use-ssd)
+            USE_SSD="1"
+            shift
+            ;;
+        --scratch-dir)
+            require_arg "$1" "${2:-}"
+            SCRATCH_DIR="$2"
+            shift 2
             ;;
         -h|--help)
             usage
@@ -411,6 +428,7 @@ echo "  Fresh run: $([ -n "$FRESH" ] && echo "yes (work + .nextflow cleared, no 
 echo "  Panel: ${PANEL}"
 echo "  Backbone BED: ${BACKBONE_BED}"
 echo "  File ownership (CHOWN_SPEC): ${CHOWN_SPEC}"
+echo "  SSD Scratch: $([ -n "$USE_SSD" ] && echo "ENABLED → ${SCRATCH_DIR}  (workDir on SSD; cleanup=true)" || echo "disabled (workDir on HDD)")"
 echo ""
 
 ANALYSIS_SAMPLE_DIR="${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME}"
@@ -428,6 +446,12 @@ if [ -n "$FRESH" ]; then
     fi
     echo "  Cleared: ${ANALYSIS_SAMPLE_DIR}/work"
     echo "  Cleared: ${ANALYSIS_SAMPLE_DIR}/.nextflow"
+    # Also clear the SSD work tree for this sample when --fresh + --use-ssd
+    if [ -n "$USE_SSD" ]; then
+        SSD_SAMPLE_WORK="${SCRATCH_DIR}/nf_work/${WORK_DIR}/${SAMPLE_NAME}"
+        rm -rf "${SSD_SAMPLE_WORK}" 2>/dev/null || true
+        echo "  Cleared (SSD): ${SSD_SAMPLE_WORK}"
+    fi
     echo ""
 fi
 
@@ -439,6 +463,24 @@ fi
 # Paraphase/SMAca/ExpansionHunter 등 biocontainer 전용 모듈은 variant caller 종류와
 # 무관하게 항상 Docker 컨테이너가 필요하므로 -profile docker 를 항상 활성화한다.
 NXF_PROFILE="-profile docker"
+
+# --use-ssd: activate the ssd_scratch profile and redirect the Nextflow
+# workDir to the SSD.  HOST_WORK_DIR must be the *host* path because the
+# DooD pattern requires the host Docker daemon to mount it into task containers.
+SSD_MOUNT_ARGS=""
+SSD_NF_PARAMS=""
+if [ -n "$USE_SSD" ]; then
+    NXF_PROFILE="-profile docker,ssd_scratch"
+    HOST_WORK_DIR="${SCRATCH_DIR}/nf_work/${WORK_DIR}/${SAMPLE_NAME}"
+    mkdir -p "${SCRATCH_DIR}"
+    # Bind-mount the SSD into the Nextflow head container AND expose it to task
+    # containers via NXF_SCRATCH_DIR (read by nextflow.config docker.runOptions).
+    SSD_MOUNT_ARGS="-v ${SCRATCH_DIR}:${SCRATCH_DIR} -e NXF_SCRATCH_DIR=${SCRATCH_DIR}"
+    SSD_NF_PARAMS="--use_ssd true --scratch_dir ${SCRATCH_DIR}"
+    echo -e "${YELLOW}[SSD] workDir → ${HOST_WORK_DIR}${NC}"
+    echo -e "${YELLOW}[SSD] Available space: $(df -h "${SCRATCH_DIR}" 2>/dev/null | awk 'NR==2{print $4}' || echo 'unknown') free${NC}"
+    echo ""
+fi
 
 # Nextflow console: live ANSI dashboard vs sequential log (default sequential — best for nextflow.log / pipeline.log)
 NF_ANSI_LOG_FLAGS="-ansi-log false"
@@ -512,6 +554,7 @@ docker run --rm -t --name "$NF_DOCKER_NAME" \
     -v "${SHARED_REF_DIR}:${SHARED_REF_DIR}:ro" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "${DOCKER_BIN}:/usr/local/bin/docker:ro" \
+    ${SSD_MOUNT_ARGS} \
     -e NXF_OPTS="-Xms1g -Xmx4g" \
     -e NXF_CACHE_DIR="${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME}/.nextflow" \
     -e NXF_DATA_DIR="${DATA_DIR}" \
@@ -546,6 +589,7 @@ docker run --rm -t --name "$NF_DOCKER_NAME" \
             --proactive_health_test ${PROACTIVE_HEALTH} \
             --include_apoe ${INCLUDE_APOE} \
             ${SKIP_CNV} \
+            ${SSD_NF_PARAMS} \
             --outdir ${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME} \
             --output_dir ${DATA_DIR}/output/${WORK_DIR}/${SAMPLE_NAME} \
             --sample_name ${SAMPLE_NAME} \
@@ -589,6 +633,15 @@ else
     repair_order_tree_permissions || true
     echo "Check logs:"
     echo "  ${DATA_DIR}/log/${WORK_DIR}/${SAMPLE_NAME}/nextflow.log"
+    # SSD failure cleanup: onComplete in main.nf also tries this, but that runs
+    # inside the Nextflow head container. This shell-level cleanup runs on the host
+    # and catches cases where the container itself crashed or was killed.
+    if [ -n "$USE_SSD" ] && [ -d "${SCRATCH_DIR}" ]; then
+        echo ""
+        echo -e "${YELLOW}[SSD] Cleaning up scratch after failure: ${SCRATCH_DIR}${NC}"
+        rm -rf "${SCRATCH_DIR}" 2>/dev/null || \
+            echo -e "${YELLOW}[SSD] Manual cleanup may be needed: rm -rf '${SCRATCH_DIR}'${NC}"
+    fi
     echo ""
     exit $EXIT_CODE
 fi
