@@ -25,6 +25,9 @@ Options:
     -d, --data-dir DIR         Data directory path (default: ./data)
     -r, --ref-dir DIR          Reference directory path (default: ./refs)
     -c, --cleanup              Clean up work directory after completion
+    --input-bam BAM_PATH       Skip FASTQ → alignment → markdup; use pre-aligned BAM directly
+                               BAM must be sorted, duplicate-marked, and indexed (.bam.bai)
+                               Saves ~45-60 min alignment time (testing / re-analysis)
     --skip-cnv                 Skip CNV analysis (single sample 시 필요, cohort mode는 2+ 샘플 필요)
     --aligner ALIGNER          Aligner to use: bwa-mem or bwa-mem2 (default)
     --variant-caller CALLER    Variant caller: gatk, deepvariant (default), or strelka2
@@ -98,6 +101,7 @@ BACKBONE_BED_GZ=""
 BACKBONE_BED_TBI=""
 LIST_PANELS=""
 # SSD scratch acceleration
+INPUT_BAM=""
 USE_SSD=""
 SCRATCH_DIR="/tmp/gx_scratch"
 # Nextflow: default -ansi-log false so nextflow.log / tee / pipeline.log are sequential (no redraw spam).
@@ -193,6 +197,11 @@ while [[ $# -gt 0 ]]; do
         --list-panels)
             LIST_PANELS="1"
             shift
+            ;;
+        --input-bam)
+            require_arg "$1" "${2:-}"
+            INPUT_BAM="$2"
+            shift 2
             ;;
         --use-ssd)
             USE_SSD="1"
@@ -304,18 +313,33 @@ if [ ! -d "${DATA_DIR}/data/refs" ] || [ ! -d "${DATA_DIR}/data/bed" ]; then
     echo -e "${RED}Error: data/refs and data/bed required. Use -d <project_root> (e.g. -d .)${NC}"
     exit 1
 fi
-if [ ! -d "$FASTQ_DIR" ]; then
-    echo -e "${RED}Error: FASTQ directory not found: ${FASTQ_DIR}${NC}"
-    exit 1
-fi
 
-# R1/R2 파일 확인 (*_R1_*, *_R1.*, *_1.*, *_R2_* 등)
-R1_COUNT=$(find "$FASTQ_DIR" \( -name "*_R1_*" -o -name "*_R1.*" -o -name "*_1.fq.gz" -o -name "*_1.fastq.gz" \) | wc -l)
-R2_COUNT=$(find "$FASTQ_DIR" \( -name "*_R2_*" -o -name "*_R2.*" -o -name "*_2.fq.gz" -o -name "*_2.fastq.gz" \) | wc -l)
+if [ -n "$INPUT_BAM" ]; then
+    # --input-bam 모드: FASTQ 디렉토리 대신 BAM 파일 검증
+    INPUT_BAM="$(realpath "$INPUT_BAM")"
+    if [ ! -f "$INPUT_BAM" ]; then
+        echo -e "${RED}Error: Input BAM not found: ${INPUT_BAM}${NC}"
+        exit 1
+    fi
+    if [ ! -f "${INPUT_BAM}.bai" ] && [ ! -f "${INPUT_BAM%.bam}.bai" ]; then
+        echo -e "${RED}Error: BAM index not found (expected ${INPUT_BAM}.bai)${NC}"
+        echo "  Run: samtools index ${INPUT_BAM}"
+        exit 1
+    fi
+else
+    if [ ! -d "$FASTQ_DIR" ]; then
+        echo -e "${RED}Error: FASTQ directory not found: ${FASTQ_DIR}${NC}"
+        exit 1
+    fi
 
-if [ "$R1_COUNT" -eq 0 ] || [ "$R2_COUNT" -eq 0 ]; then
-    echo -e "${RED}Error: R1/R2 FASTQ files not found in ${FASTQ_DIR}${NC}"
-    exit 1
+    # R1/R2 파일 확인 (*_R1_*, *_R1.*, *_1.*, *_R2_* 등)
+    R1_COUNT=$(find "$FASTQ_DIR" \( -name "*_R1_*" -o -name "*_R1.*" -o -name "*_1.fq.gz" -o -name "*_1.fastq.gz" \) | wc -l)
+    R2_COUNT=$(find "$FASTQ_DIR" \( -name "*_R2_*" -o -name "*_R2.*" -o -name "*_2.fq.gz" -o -name "*_2.fastq.gz" \) | wc -l)
+
+    if [ "$R1_COUNT" -eq 0 ] || [ "$R2_COUNT" -eq 0 ]; then
+        echo -e "${RED}Error: R1/R2 FASTQ files not found in ${FASTQ_DIR}${NC}"
+        exit 1
+    fi
 fi
 
 # 결과물 소유자: 기본은 실행 사용자(uid:gid)
@@ -414,7 +438,11 @@ echo ""
 echo -e "${GREEN}Configuration:${NC}"
 echo "  Work Directory: ${WORK_DIR}"
 echo "  Sample Name: ${SAMPLE_NAME}"
-echo "  FASTQ Directory: ${FASTQ_DIR}"
+if [ -n "$INPUT_BAM" ]; then
+    echo "  Input BAM: ${INPUT_BAM}  [FASTQ/alignment skipped]"
+else
+    echo "  FASTQ Directory: ${FASTQ_DIR}"
+fi
 echo "  Data Directory: ${DATA_DIR}"
 echo "  Reference Directory: ${REF_DIR}"
 echo "  Cleanup: ${CLEANUP:-disabled}"
@@ -522,6 +550,19 @@ echo ""
 # DeepVariant 등 태스크 컨테이너가 작업 디렉터리를 마운트하지 못합니다.
 HOST_WORK_DIR="${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME}/work"
 
+# --input-bam: mount the BAM's parent directory if it lives outside DATA_DIR
+INPUT_BAM_MOUNT_ARGS=""
+INPUT_BAM_NF_PARAM=""
+if [ -n "$INPUT_BAM" ]; then
+    BAM_DIR="$(dirname "$INPUT_BAM")"
+    # Only add an extra mount if the BAM is NOT already under DATA_DIR
+    case "$INPUT_BAM" in
+        "${DATA_DIR}/"*) ;;  # already covered by existing mounts
+        *) INPUT_BAM_MOUNT_ARGS="-v ${BAM_DIR}:${BAM_DIR}:ro" ;;
+    esac
+    INPUT_BAM_NF_PARAM="--input_bam ${INPUT_BAM}"
+fi
+
 # Docker binary path on the host — bind-mounted into the container so
 # Nextflow (docker.enabled=true) can spawn task containers via the host daemon.
 DOCKER_BIN="$(which docker)"
@@ -547,6 +588,7 @@ docker run --rm -t --name "$NF_DOCKER_NAME" \
     -e NXF_HOME=/tmp/.nextflow \
     -v "${DATA_DIR}/bin:/app/bin:ro" \
     -v "${DATA_DIR}/fastq:${DATA_DIR}/fastq:ro" \
+    ${INPUT_BAM_MOUNT_ARGS} \
     -v "${DATA_DIR}/analysis:${DATA_DIR}/analysis" \
     -v "${DATA_DIR}/output:${DATA_DIR}/output" \
     -v "${DATA_DIR}/log:${DATA_DIR}/log" \
@@ -568,7 +610,8 @@ docker run --rm -t --name "$NF_DOCKER_NAME" \
         cd ${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME} && \
         nextflow -log ${DATA_DIR}/log/${WORK_DIR}/${SAMPLE_NAME}/nextflow.log run /app/bin/main.nf \
             ${NF_ANSI_LOG_FLAGS} ${NEXTFLOW_RESUME} ${NXF_PROFILE} \
-            --fastq_dir ${DATA_DIR}/fastq/${WORK_DIR}/${SAMPLE_NAME} \
+            $([ -z "${INPUT_BAM}" ] && echo "--fastq_dir ${DATA_DIR}/fastq/${WORK_DIR}/${SAMPLE_NAME}") \
+            ${INPUT_BAM_NF_PARAM} \
             --ref_fasta ${DATA_DIR}/data/refs/GRCh38.fasta \
             --ref_fai ${DATA_DIR}/data/refs/GRCh38.fasta.fai \
             --ref_dict ${DATA_DIR}/data/refs/GRCh38.dict \
@@ -616,7 +659,9 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo ""
 
     # analysis.completed 마커 (FASTQ 가 ro/타 소유면 실패할 수 있음 — 파이프라인 성공과 무관)
-    if touch "${FASTQ_DIR}/analysis.completed" 2>/dev/null; then
+    MARKER_TARGET="${FASTQ_DIR}"
+    [ -n "$INPUT_BAM" ] && MARKER_TARGET="$(dirname "$INPUT_BAM")"
+    if touch "${MARKER_TARGET}/analysis.completed" 2>/dev/null; then
         echo -e "${GREEN}✅ Created analysis.completed marker${NC}"
     elif touch "${DATA_DIR}/output/${WORK_DIR}/${SAMPLE_NAME}/analysis.completed" 2>/dev/null; then
         echo -e "${GREEN}✅ Created analysis.completed in output dir${NC}"

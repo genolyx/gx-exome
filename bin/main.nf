@@ -4,6 +4,8 @@ nextflow.enable.dsl=2
 params.cleanup = false
 params.output_dir = null
 params.sample_name = null
+// BAM input mode: skip FASTQ → alignment → markdup (pre-aligned BAM)
+params.input_bam = null
 params.skip_vep = false
 params.vep_cache_dir = "${projectDir}/../data/refs/vep_cache"
 // Defaults also here so behavior is defined even if nextflow.config is not picked up
@@ -66,8 +68,8 @@ include { RUN_APOE }                              from './modules/apoe'
 // Workflow
 // -------------------------------------------------------
 workflow {
-    if (params.fastq_dir == null) {
-        error "Please provide --fastq_dir"
+    if (params.fastq_dir == null && params.input_bam == null) {
+        error "Please provide --fastq_dir (FASTQ mode) or --input_bam (pre-aligned BAM mode)"
     }
 
     // Validate aligner parameter
@@ -120,31 +122,6 @@ workflow {
     println "  APOE (ε2/ε3/ε4 → apoe/): ${apoeBanner}"
     println "=" * 60
 
-    // FASTQ pairs: explicit R1→R2 pairing. Nextflow's fromFilePairs(*_R{1,2}_*) has proven unreliable
-    // for some Illumina names (channel stays empty; only PREPARE_VIZ_RESOURCES runs → false SUCCESS).
-    // We discover *_R1_* files synchronously, fail fast if none or R2 missing, then emit [sample_id,[R1,R2]].
-    def fqDir = new File(params.fastq_dir as String)
-    if (!fqDir.isDirectory()) {
-        error "FASTQ directory does not exist or is not a directory: ${params.fastq_dir}"
-    }
-    def r1Files = fqDir.listFiles()?.findAll { f ->
-        f.file && f.name.contains('_R1_') && (f.name.endsWith('.fq.gz') || f.name.endsWith('.fastq.gz'))
-    }?.sort { a, b -> a.name <=> b.name }
-    if (!r1Files) {
-        error "No *_R1_*.{fastq|fq}.gz files under ${params.fastq_dir}. Pair each R1 with an R2 file (same name with _R2_ in place of _R1_)."
-    }
-    println "FASTQ: ${r1Files.size()} R1 file(s) → pairing with matching _R2_ reads"
-    Channel
-        .fromList(r1Files.collect { it.toString() })
-        .map { String r1path ->
-            def r1 = file(r1path)
-            def r2path = r1path.replace('_R1_', '_R2_')
-            def r2 = file(r2path, checkIfExists: true)
-            def sid = r1.name.replaceAll(/_R1_.*/, '')
-            tuple(sid, [r1, r2])
-        }
-        .set { fastq_ch }
-
     ref_fasta = file(params.ref_fasta)
     ref_fai   = file(params.ref_fai)
 
@@ -153,97 +130,145 @@ workflow {
     // -------------------------------------------------------
     PREPARE_VIZ_RESOURCES(ref_fasta, ref_fai)
 
-    // -------------------------------------------------------
-    // SSD Scratch setup (when --use-ssd)
-    // SCRATCH_SETUP validates the SSD dir and emits a barrier
-    // channel so alignment only starts after setup succeeds.
-    // -------------------------------------------------------
-    if (useSsd) {
-        SCRATCH_SETUP(
-            Channel.value(params.sample_name as String ?: 'gx_exome_sample'),
-            Channel.value(params.scratch_dir as String)
-        )
-        // Cross-join fastq_ch with the single scratch_dir signal → creates
-        // a data dependency so ALIGN starts only after SCRATCH_SETUP.
-        fastq_ch = fastq_ch
-            .combine(SCRATCH_SETUP.out.scratch_dir)
-            .map { sid, reads, _sd -> tuple(sid, reads) }
-    }
-
-    // -------------------------------------------------------
-    // 1. Alignment — BWA-MEM or BWA-MEM2
-    // -------------------------------------------------------
-    // If params.ref_bwa*_indices points at a missing or empty dir, Channel.fromPath().collect()
-    // yields an empty list — ALIGN never schedules tasks but PREPARE_VIZ_RESOURCES still runs → false SUCCESS.
-    def dirHasFilesMatching = { String dir, java.util.regex.Pattern namePat ->
-        try {
-            def d = new File(dir)
-            if (!d.isDirectory()) return false
-            return d.listFiles()?.any { f -> f.isFile() && (f.getName() ==~ namePat) }
-        } catch (Throwable t) {
-            return false
+    if (params.input_bam) {
+        // -------------------------------------------------------
+        // BAM INPUT MODE — skip FASTQ → alignment → markdup
+        // Expects a sorted, duplicate-marked, indexed BAM.
+        // bam_ch format: tuple(sample_id, bam, bai)
+        // -------------------------------------------------------
+        def bamFile = file(params.input_bam as String)
+        if (!bamFile.exists()) error "input_bam not found: ${params.input_bam}"
+        def baiFile = file("${params.input_bam}.bai")
+        if (!baiFile.exists()) {
+            baiFile = file((params.input_bam as String).replaceAll(/\.bam$/, '.bai'))
         }
-    }
-
-    if (params.aligner == 'bwa-mem2') {
-        def usePrebuiltMem2 = false
-        if (params.ref_bwa_mem2_indices) {
-            def mem2Path = "${params.ref_bwa_mem2_indices}".trim()
-            usePrebuiltMem2 = dirHasFilesMatching(mem2Path, ~/.+\.(0123|amb|ann|bwt\.2bit\.64|pac)$/)
-            if (!usePrebuiltMem2) {
-                println "WARN: ref_bwa_mem2_indices=${mem2Path} missing or has no index files — running INDEX_BWA_MEM2 (first run can take ~30+ min for GRCh38)."
-            }
-        }
-        if (usePrebuiltMem2) {
-            bwa_mem2_indices = Channel.fromPath(
-                "${params.ref_bwa_mem2_indices.toString().trim()}/*.{0123,amb,ann,bwt.2bit.64,pac}"
-            ).collect()
-        } else {
-            INDEX_BWA_MEM2(ref_fasta)
-            bwa_mem2_indices = INDEX_BWA_MEM2.out.indices.map { it[1] }.collect()
-        }
-        ALIGN_AND_SORT_BWA_MEM2(fastq_ch, ref_fasta, ref_fai, bwa_mem2_indices)
-        raw_bam_ch = ALIGN_AND_SORT_BWA_MEM2.out.bam
+        if (!baiFile.exists()) error "BAM index not found (expected ${params.input_bam}.bai)"
+        def sid = params.sample_name as String ?: bamFile.baseName.replaceAll(/\.md$/, '')
+        println "BAM input mode: ${bamFile.name}  (sample=${sid}, alignment/markdup skipped)"
+        bam_ch = Channel.value(tuple(sid, bamFile, baiFile))
+        SAMTOOLS_BAM_STATS(bam_ch)
 
     } else {
-        def usePrebuiltBwa = false
-        if (params.ref_bwa_indices) {
-            def bwaPath = "${params.ref_bwa_indices}".trim()
-            usePrebuiltBwa = dirHasFilesMatching(bwaPath, ~/.+\.(amb|ann|bwt|pac|sa)$/)
-            if (!usePrebuiltBwa) {
-                println "WARN: ref_bwa_indices=${bwaPath} missing or has no index files — running INDEX_BWA."
+        // -------------------------------------------------------
+        // FASTQ INPUT MODE — full alignment pipeline
+        // -------------------------------------------------------
+        // FASTQ pairs: explicit R1→R2 pairing. Nextflow's fromFilePairs(*_R{1,2}_*) has proven unreliable
+        // for some Illumina names (channel stays empty; only PREPARE_VIZ_RESOURCES runs → false SUCCESS).
+        // We discover *_R1_* files synchronously, fail fast if none or R2 missing, then emit [sample_id,[R1,R2]].
+        def fqDir = new File(params.fastq_dir as String)
+        if (!fqDir.isDirectory()) {
+            error "FASTQ directory does not exist or is not a directory: ${params.fastq_dir}"
+        }
+        def r1Files = fqDir.listFiles()?.findAll { f ->
+            f.file && f.name.contains('_R1_') && (f.name.endsWith('.fq.gz') || f.name.endsWith('.fastq.gz'))
+        }?.sort { a, b -> a.name <=> b.name }
+        if (!r1Files) {
+            error "No *_R1_*.{fastq|fq}.gz files under ${params.fastq_dir}. Pair each R1 with an R2 file (same name with _R2_ in place of _R1_)."
+        }
+        println "FASTQ: ${r1Files.size()} R1 file(s) → pairing with matching _R2_ reads"
+        Channel
+            .fromList(r1Files.collect { it.toString() })
+            .map { String r1path ->
+                def r1 = file(r1path)
+                def r2path = r1path.replace('_R1_', '_R2_')
+                def r2 = file(r2path, checkIfExists: true)
+                def sid = r1.name.replaceAll(/_R1_.*/, '')
+                tuple(sid, [r1, r2])
+            }
+            .set { fastq_ch }
+
+        // -------------------------------------------------------
+        // SSD Scratch setup (when --use-ssd)
+        // SCRATCH_SETUP validates the SSD dir and emits a barrier
+        // channel so alignment only starts after setup succeeds.
+        // -------------------------------------------------------
+        if (useSsd) {
+            SCRATCH_SETUP(
+                Channel.value(params.sample_name as String ?: 'gx_exome_sample'),
+                Channel.value(params.scratch_dir as String)
+            )
+            // Cross-join fastq_ch with the single scratch_dir signal → creates
+            // a data dependency so ALIGN starts only after SCRATCH_SETUP.
+            fastq_ch = fastq_ch
+                .combine(SCRATCH_SETUP.out.scratch_dir)
+                .map { sid, reads, _sd -> tuple(sid, reads) }
+        }
+
+        // -------------------------------------------------------
+        // 1. Alignment — BWA-MEM or BWA-MEM2
+        // -------------------------------------------------------
+        // If params.ref_bwa*_indices points at a missing or empty dir, Channel.fromPath().collect()
+        // yields an empty list — ALIGN never schedules tasks but PREPARE_VIZ_RESOURCES still runs → false SUCCESS.
+        def dirHasFilesMatching = { String dir, java.util.regex.Pattern namePat ->
+            try {
+                def d = new File(dir)
+                if (!d.isDirectory()) return false
+                return d.listFiles()?.any { f -> f.isFile() && (f.getName() ==~ namePat) }
+            } catch (Throwable t) {
+                return false
             }
         }
-        if (usePrebuiltBwa) {
-            bwa_indices = Channel.fromPath(
-                "${params.ref_bwa_indices.toString().trim()}/*.{amb,ann,bwt,pac,sa}"
-            ).collect()
+
+        if (params.aligner == 'bwa-mem2') {
+            def usePrebuiltMem2 = false
+            if (params.ref_bwa_mem2_indices) {
+                def mem2Path = "${params.ref_bwa_mem2_indices}".trim()
+                usePrebuiltMem2 = dirHasFilesMatching(mem2Path, ~/.+\.(0123|amb|ann|bwt\.2bit\.64|pac)$/)
+                if (!usePrebuiltMem2) {
+                    println "WARN: ref_bwa_mem2_indices=${mem2Path} missing or has no index files — running INDEX_BWA_MEM2 (first run can take ~30+ min for GRCh38)."
+                }
+            }
+            if (usePrebuiltMem2) {
+                bwa_mem2_indices = Channel.fromPath(
+                    "${params.ref_bwa_mem2_indices.toString().trim()}/*.{0123,amb,ann,bwt.2bit.64,pac}"
+                ).collect()
+            } else {
+                INDEX_BWA_MEM2(ref_fasta)
+                bwa_mem2_indices = INDEX_BWA_MEM2.out.indices.map { it[1] }.collect()
+            }
+            ALIGN_AND_SORT_BWA_MEM2(fastq_ch, ref_fasta, ref_fai, bwa_mem2_indices)
+            raw_bam_ch = ALIGN_AND_SORT_BWA_MEM2.out.bam
+
         } else {
-            INDEX_BWA(ref_fasta)
-            bwa_indices = INDEX_BWA.out.indices.map { it[1] }.collect()
+            def usePrebuiltBwa = false
+            if (params.ref_bwa_indices) {
+                def bwaPath = "${params.ref_bwa_indices}".trim()
+                usePrebuiltBwa = dirHasFilesMatching(bwaPath, ~/.+\.(amb|ann|bwt|pac|sa)$/)
+                if (!usePrebuiltBwa) {
+                    println "WARN: ref_bwa_indices=${bwaPath} missing or has no index files — running INDEX_BWA."
+                }
+            }
+            if (usePrebuiltBwa) {
+                bwa_indices = Channel.fromPath(
+                    "${params.ref_bwa_indices.toString().trim()}/*.{amb,ann,bwt,pac,sa}"
+                ).collect()
+            } else {
+                INDEX_BWA(ref_fasta)
+                bwa_indices = INDEX_BWA.out.indices.map { it[1] }.collect()
+            }
+            ALIGN_AND_SORT(fastq_ch, ref_fasta, ref_fai, bwa_indices)
+            raw_bam_ch = ALIGN_AND_SORT.out.bam
         }
-        ALIGN_AND_SORT(fastq_ch, ref_fasta, ref_fai, bwa_indices)
-        raw_bam_ch = ALIGN_AND_SORT.out.bam
-    }
 
-    // MarkDuplicates — shared regardless of aligner
-    MARK_DUPLICATES(raw_bam_ch)
-    SAMTOOLS_BAM_STATS(MARK_DUPLICATES.out.bam)
+        // MarkDuplicates — shared regardless of aligner
+        MARK_DUPLICATES(raw_bam_ch)
+        SAMTOOLS_BAM_STATS(MARK_DUPLICATES.out.bam)
 
-    // SSD: relay final .md.bam through SCRATCH_MOVE_FINAL to log SSD usage
-    // and expose a clean channel boundary between alignment (SSD) and the
-    // remaining pipeline.  publishDir 'copy' inside MARK_DUPLICATES already
-    // wrote the HDD copy; this process only creates symlinks + logging.
-    if (useSsd) {
-        SCRATCH_MOVE_FINAL(
-            MARK_DUPLICATES.out.bam,
-            Channel.value(params.scratch_dir as String)
-        )
-        bam_ch = SCRATCH_MOVE_FINAL.out.bam
-    } else {
-        // Use MarkDuplicated BAM for all downstream processes
-        bam_ch = MARK_DUPLICATES.out.bam
-    }
+        // SSD: relay final .md.bam through SCRATCH_MOVE_FINAL to log SSD usage
+        // and expose a clean channel boundary between alignment (SSD) and the
+        // remaining pipeline.  publishDir 'copy' inside MARK_DUPLICATES already
+        // wrote the HDD copy; this process only creates symlinks + logging.
+        if (useSsd) {
+            SCRATCH_MOVE_FINAL(
+                MARK_DUPLICATES.out.bam,
+                Channel.value(params.scratch_dir as String)
+            )
+            bam_ch = SCRATCH_MOVE_FINAL.out.bam
+        } else {
+            // Use MarkDuplicated BAM for all downstream processes
+            bam_ch = MARK_DUPLICATES.out.bam
+        }
+    } // end FASTQ input mode
 
     // mosdepth per-base + tabix under qc/ (service-daemon gene coverage); optional *_gene_coverage.tsv
     if (mosdepthPerBaseOn) {
