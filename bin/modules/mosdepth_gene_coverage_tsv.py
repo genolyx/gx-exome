@@ -11,6 +11,7 @@ Output columns match daemon-friendly names: gene, mean_coverage, pct_bases_10x, 
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -19,6 +20,11 @@ from typing import Dict, List, Tuple
 
 
 Interval = Tuple[str, int, int]  # chrom, start, end (0-based half-open)
+
+# Prefer tabix from the same conda env as this interpreter (handles containers
+# where PATH may not include the micromamba-created env/bin at Python launch time).
+_TABIX_CANDIDATE = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "tabix")
+_TABIX = _TABIX_CANDIDATE if os.path.isfile(_TABIX_CANDIDATE) else "tabix"
 
 _GENE_SYM = re.compile(r"^[A-Za-z][A-Za-z0-9-]{0,24}$")
 _SKIP_TOK_PREFIXES = (
@@ -114,7 +120,7 @@ def _tabix_lines(bgz: str, chrom: str, start: int, end: int) -> List[str]:
         r = f"{ch}:{start}-{end}"
         try:
             out = subprocess.check_output(
-                ["tabix", "--zero-based", bgz, r],
+                [_TABIX, "--zero-based", bgz, r],
                 stderr=subprocess.DEVNULL,
                 text=True,
             )

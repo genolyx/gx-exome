@@ -569,7 +569,9 @@ DOCKER_BIN="$(which docker)"
 
 # 비-root 로 Nextflow를 띄우면 work/ 해시 디렉터리도 동일 uid 로 생성되어
 # NXF_DOCKER_TASK_USER 태스크 컨테이너와 쓰기 권한이 맞음. (root 메인 + 1000 태스크면 .command.trace Permission denied)
-# passwd 에 없으면 HOME 이 비어 Nextflow가 잘못된 경로에 쓰므로 HOME/NXF_HOME 고정.
+# passwd 에 없으면 HOME 이 비어 Nextflow가 잘못된 경로에 쓰므로 HOME 고정.
+# NXF_HOME 은 샘플별 .nextflow (호스트 영구 경로) — /tmp 사용 시 컨테이너 재기동마다
+# history 가 사라져 -resume 이 무시됨.
 # docker.sock 이 root:docker 이면 컨테이너에 docker GID 보조 그룹 필요.
 DOCKER_GROUP_ARGS=()
 if DOCKER_SOCK_GID="$(getent group docker 2>/dev/null | cut -d: -f3)" && [ -n "${DOCKER_SOCK_GID}" ]; then
@@ -581,11 +583,13 @@ NF_DOCKER_NAME_RAW="gx-exome-${WORK_DIR}-${SAMPLE_NAME}"
 NF_DOCKER_NAME="$(printf '%s' "$NF_DOCKER_NAME_RAW" | sed -e 's/[^a-zA-Z0-9_.-]/-/g' -e 's/^[-_.]*//' -e 's/^$/gx-exome-unknown/')"
 NF_DOCKER_NAME="${NF_DOCKER_NAME:0:200}"
 
+NXF_SAMPLE_HOME="${ANALYSIS_SAMPLE_DIR}/.nextflow"
+
 docker run --rm -t --name "$NF_DOCKER_NAME" \
     -u "${CHOWN_SPEC}" \
     "${DOCKER_GROUP_ARGS[@]}" \
     -e HOME=/tmp \
-    -e NXF_HOME=/tmp/.nextflow \
+    -e NXF_HOME="${NXF_SAMPLE_HOME}" \
     -v "${DATA_DIR}/bin:/app/bin:ro" \
     -v "${DATA_DIR}/fastq:${DATA_DIR}/fastq:ro" \
     ${INPUT_BAM_MOUNT_ARGS} \
@@ -598,7 +602,7 @@ docker run --rm -t --name "$NF_DOCKER_NAME" \
     -v "${DOCKER_BIN}:/usr/local/bin/docker:ro" \
     ${SSD_MOUNT_ARGS} \
     -e NXF_OPTS="-Xms1g -Xmx4g" \
-    -e NXF_CACHE_DIR="${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME}/.nextflow" \
+    -e NXF_CACHE_DIR="${NXF_SAMPLE_HOME}" \
     -e NXF_DATA_DIR="${DATA_DIR}" \
     -e NXF_DOCKER_TASK_USER="${CHOWN_SPEC}" \
     -e HOST_WORK_DIR="${HOST_WORK_DIR}" \
