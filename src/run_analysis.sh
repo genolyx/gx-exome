@@ -38,6 +38,7 @@ Options:
     --nf-live-log              Nextflow live progress dashboard (ANSI); default is off for clean logs
     --shared-ref-dir DIR       Shared reference root (default: /data/reference)
     --fresh                    Delete sample work/ and .nextflow cache, then run (no -resume)
+    --no-resume                Skip -resume flag without deleting cache (re-run all steps, keep work/ intact)
     --use-ssd                  Route alignment workDir to SSD for faster BAM I/O
                                Enables ssd_scratch profile: cleanup=true (disables -resume)
                                Use --scratch-dir to specify SSD path (default: /tmp/gx_scratch)
@@ -182,6 +183,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --fresh)
             FRESH="1"
+            shift
+            ;;
+        --no-resume)
+            NO_RESUME="1"
             shift
             ;;
         --panel)
@@ -484,7 +489,7 @@ if [ -n "$FRESH" ]; then
 fi
 
 NEXTFLOW_RESUME="-resume"
-if [ -n "$FRESH" ]; then
+if [ -n "$FRESH" ] || [ -n "$NO_RESUME" ]; then
     NEXTFLOW_RESUME=""
 fi
 
