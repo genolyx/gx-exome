@@ -505,7 +505,7 @@ SSD_NF_PARAMS=""
 if [ -n "$USE_SSD" ]; then
     NXF_PROFILE="-profile docker,ssd_scratch"
     HOST_WORK_DIR="${SCRATCH_DIR}/nf_work/${WORK_DIR}/${SAMPLE_NAME}"
-    mkdir -p "${SCRATCH_DIR}"
+    mkdir -p "${HOST_WORK_DIR}"
     # Bind-mount the SSD into the Nextflow head container AND expose it to task
     # containers via NXF_SCRATCH_DIR (read by nextflow.config docker.runOptions).
     SSD_MOUNT_ARGS="-v ${SCRATCH_DIR}:${SCRATCH_DIR} -e NXF_SCRATCH_DIR=${SCRATCH_DIR}"
@@ -553,7 +553,10 @@ echo ""
 # HOST_WORK_DIR: Nextflow이 태스크 컨테이너에 work dir를 마운트할 때 호스트 경로를 써야 합니다.
 # 컨테이너 내부 경로(/data/analysis/...)를 쓰면 호스트 Docker 데몬이 경로를 찾지 못해
 # DeepVariant 등 태스크 컨테이너가 작업 디렉터리를 마운트하지 못합니다.
-HOST_WORK_DIR="${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME}/work"
+# --use-ssd already set HOST_WORK_DIR to the scratch tree above; do not overwrite it.
+if [ -z "$USE_SSD" ]; then
+    HOST_WORK_DIR="${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME}/work"
+fi
 
 # --input-bam: mount the BAM's parent directory if it lives outside DATA_DIR
 INPUT_BAM_MOUNT_ARGS=""

@@ -569,3 +569,31 @@ PYAPOE_BANNER
     fi
     """
 }
+
+process GENERATE_VISUAL_STUB {
+    tag "$sample_id"
+    label 'local'
+    publishDir "${params.outdir}/snapshots", mode: 'copy'
+
+    input:
+    val sample_id
+
+    output:
+    path "${sample_id}_visual_report.html", emit: snapshots
+
+    script:
+    """
+    cat > ${sample_id}_visual_report.html << 'EOF'
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${sample_id} visual evidence unavailable</title></head>
+<body>
+<h1>Visual evidence unavailable</h1>
+<p>IGV snapshots were not generated because one or more required inputs
+(BAM, annotated VCF, ExpansionHunter realigned BAM, or SMN unified BAM)
+were missing for sample <code>${sample_id}</code>.</p>
+<p>The pipeline continued (soft-fail). Check ExpansionHunter, SMN unified
+c.840, and VEP/filtered VCF outputs.</p>
+</body></html>
+EOF
+    """
+}

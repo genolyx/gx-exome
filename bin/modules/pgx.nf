@@ -15,6 +15,9 @@ process RUN_PGX_PHARMCAT {
     output:
     tuple val(sample_id), path("pgx_staging"), emit: staged
 
+    // Soft-fail: PharmCAT errors must not fail the exome run. Exit code and
+    // stderr are recorded in pgx_staging; FINALIZE_PGX_JSON writes warning
+    // meta/result/HTML so the portal can show PGx as incomplete.
     script:
     """
     set +e
@@ -187,39 +190,39 @@ for source, gene_name, gene_data in source_gene_pairs:
     if not rec_dips:
         continue
 
-        for dip in rec_dips:
-            a1 = dip.get("allele1") or {}
-            a2 = dip.get("allele2") or {}
-            n1 = a1.get("name", "")
-            n2 = a2.get("name", "")
-            fn1 = (a1.get("function") or "").strip()
-            fn2 = (a2.get("function") or "").strip()
-            phenotypes = dip.get("phenotypes", [])
-            activity = dip.get("activityScore")
-            diplotype = f"{n1}/{n2}" if n2 else n1
-            phenotype_str = ", ".join(p for p in phenotypes if p) if phenotypes else ""
+    for dip in rec_dips:
+        a1 = dip.get("allele1") or {}
+        a2 = dip.get("allele2") or {}
+        n1 = a1.get("name", "")
+        n2 = a2.get("name", "")
+        fn1 = (a1.get("function") or "").strip()
+        fn2 = (a2.get("function") or "").strip()
+        phenotypes = dip.get("phenotypes", [])
+        activity = dip.get("activityScore")
+        diplotype = f"{n1}/{n2}" if n2 else n1
+        phenotype_str = ", ".join(p for p in phenotypes if p) if phenotypes else ""
 
-            if phenotype_str.lower() in SKIP_PHENOTYPES:
-                continue
+        if phenotype_str.lower() in SKIP_PHENOTYPES:
+            continue
 
-            functions = [f for f in (fn1, fn2) if f]
-            has_risk = any(f.lower() in RISK_FUNCTIONS for f in functions)
+        functions = [f for f in (fn1, fn2) if f]
+        has_risk = any(f.lower() in RISK_FUNCTIONS for f in functions)
 
-            row = f"{gene_name:12s}  {diplotype:35s}  {phenotype_str}"
-            if activity and str(activity) != "None":
-                row += f"  (activity: {activity})"
-            if call_src == "OUTSIDE":
-                row += "  [Aldy]"
-            if has_risk:
-                row += "  <<"
+        row = f"{gene_name:12s}  {diplotype:35s}  {phenotype_str}"
+        if activity and str(activity) != "None":
+            row += f"  (activity: {activity})"
+        if call_src == "OUTSIDE":
+            row += "  [Aldy]"
+        if has_risk:
+            row += "  <<"
 
-            if has_risk:
-                actionable.append((gene_name, row, functions, phenotype_str))
-            else:
-                normal.append(row)
+        if has_risk:
+            actionable.append((gene_name, row, functions, phenotype_str))
+        else:
+            normal.append(row)
 
-            seen_genes.add(gene_name)
-            break
+        seen_genes.add(gene_name)
+        break
 
 if actionable:
     lines.append("*** ACTIONABLE — genes with reduced/no-function alleles ***")
@@ -245,6 +248,24 @@ with open("pgx_summary.txt", "w") as f:
     f.write("\\n".join(lines) + "\\n")
 
 PYSUMMARY
+
+    # Always publish a report HTML so optional output is not silently dropped.
+    # Soft-fail policy: missing/failed PharmCAT → warning stub, process exits 0.
+    if [ ! -s "${sample_id}_pgx.report.html" ]; then
+        EC_HTML=\$(cat pharmcat_exit.code 2>/dev/null || echo unknown)
+        cat > "${sample_id}_pgx.report.html" << EOFHTML
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>PGx report unavailable</title></head>
+<body>
+<h1>PGx report unavailable</h1>
+<p>PharmCAT did not produce <code>${sample_id}_pgx.report.html</code> (exit=\${EC_HTML}).</p>
+<p>See <code>pgx_meta.json</code>, <code>pgx_result.json</code>, and <code>pharmcat.stderr.log</code>.</p>
+</body></html>
+EOFHTML
+        if [ -f pgx_summary.txt ]; then
+            printf '\\nWARNING: PharmCAT report HTML was missing (exit=%s). Pipeline continued (soft-fail).\\n' "\$EC_HTML" >> pgx_summary.txt
+        fi
+    fi
 
     exit 0
     """

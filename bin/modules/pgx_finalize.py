@@ -103,11 +103,21 @@ def main() -> None:
         },
     }
 
+    html_ok = os.path.isfile(rep_html)
+
     if rc == 0 and (match_data is not None or phen_data is not None or rep_data is not None):
         out_result["named_allele_matcher"] = match_data
         out_result["phenotype"] = phen_data
         if rep_data is not None:
             out_result["reporter"] = rep_data
+        if not html_ok:
+            out_result["warning"] = (
+                "PharmCAT produced JSON but report HTML is missing; "
+                "FINALIZE_PGX_JSON writes a stub HTML (soft-fail)."
+            )
+            if meta.get("exit_status") == "success":
+                meta["exit_status"] = "warning"
+            meta["message"] = out_result["warning"]
     elif rc == 0:
         out_result["warning"] = "PharmCAT exited 0 but expected JSON outputs were not found."
         meta["exit_status"] = "error"

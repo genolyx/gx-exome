@@ -56,7 +56,7 @@ include { FALLBACK_ANALYSIS }       from './modules/fallback'
 include { HBA_PARALOG_PILEUP }      from './modules/hba_paralog'
 include { CYP21_PARALOG_PILEUP }    from './modules/cyp21_paralog'
 include { CYP21_HOTSPOT_PILEUP }    from './modules/cyp21_hotspot_pileup'
-include { GENERATE_VISUAL_EVIDENCE } from './modules/visualize'
+include { GENERATE_VISUAL_EVIDENCE; GENERATE_VISUAL_STUB } from './modules/visualize'
 include { PREPARE_VIZ_RESOURCES }   from './modules/resources'
 include { RUN_PGX_PHARMCAT; FINALIZE_PGX_JSON } from './modules/pgx'
 include { RUN_ALDY_CYP2D6 }                     from './modules/aldy'
@@ -590,20 +590,25 @@ workflow {
     // 1b. Visual Evidence (IGV Snapshots)
     // -------------------------------------------------------
     eh_json_ch = EXPANSION_HUNTER.out.results.map { sid, json, vcf -> tuple(sid, json) }
-    viz_input    = bam_ch.join(anno_viz_ch)
-        .join(EXPANSION_HUNTER.out.eh_realigned, by: 0)
-        .join(eh_json_ch, by: 0)
-        .join(SMN_UNIFIED_C840_BAM.out.unified, by: 0)
-    eh_images_all = EXPANSION_HUNTER.out.images.map { it[1] }.collect()
+    // remainder:true so a missing EH/SMN/VCF side does not drop the sample silently.
+    // Complete tuples go to IGV snapshots; incomplete ones get a stub HTML.
+    viz_joined = bam_ch.join(anno_viz_ch, by: 0, remainder: true)
+        .join(EXPANSION_HUNTER.out.eh_realigned, by: 0, remainder: true)
+        .join(eh_json_ch, by: 0, remainder: true)
+        .join(SMN_UNIFIED_C840_BAM.out.unified, by: 0, remainder: true)
+    viz_complete   = viz_joined.filter { row -> row.every { it != null } }
+    viz_incomplete = viz_joined.filter { row -> row.any { it == null } }.map { row -> row[0] }
+    eh_images_all = EXPANSION_HUNTER.out.images.map { it[1] }.collect().ifEmpty([])
 
     GENERATE_VISUAL_EVIDENCE(
-        viz_input,
+        viz_complete,
         eh_images_all,
         ref_fasta,
         ref_fai,
         PREPARE_VIZ_RESOURCES.out.gtf,
         PREPARE_VIZ_RESOURCES.out.gtf_index
     )
+    GENERATE_VISUAL_STUB(viz_incomplete)
 
     // -------------------------------------------------------
     // Final Consolidation
@@ -617,13 +622,18 @@ workflow {
     GENERATE_SUMMARY_REPORT(
         manta_vcf_ch,
         gcnv_vcf_ch,
-        PARAPHASE_RESCUE.out.json.collect(),
+        // Primary Paraphase JSON (SMN/GBA/PMS2/…). Rescue JSON is a dark-gene
+        // subset published under rescue/paraphase/ and is not the summary source.
+        PARAPHASE_RUN.out.json.map { _sid, json -> json }.collect(),
         hba_report_ch,
         cyp21a2_report_ch,
         EXPANSION_HUNTER.out.results.map { it[2] }.collect(),
         SMACA_RUN.out.txt.map { it[1] }.collect(),
         intron_report_ch,
-        GENERATE_VISUAL_EVIDENCE.out.snapshots.collect(),
+        GENERATE_VISUAL_EVIDENCE.out.snapshots
+            .mix(GENERATE_VISUAL_STUB.out.snapshots)
+            .collect()
+            .ifEmpty([]),
         params.backbone_bed ? file(params.backbone_bed) : file("NO_BED"),
         HBA_PARALOG_PILEUP.out.tsv.collect(),
         CYP21_PARALOG_PILEUP.out.tsv.collect(),
