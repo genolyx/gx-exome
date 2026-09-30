@@ -19,7 +19,24 @@
 // gnomAD/dbSNP VCF files directly, reducing daemon memory usage significantly.
 //
 // VEP cache must be pre-installed on the server. See SERVER_SETUP.md.
+//
+// Static VEP flags live in modules/vep_annotation.flags. src/annotate_vcf.sh
+// reads that same file. Do not paste a second copy into these process scripts.
 // ============================================================
+
+def vepAnnotationStaticFlags() {
+    def flagFile = file("${projectDir}/modules/vep_annotation.flags")
+    if (!flagFile.exists()) {
+        throw new IllegalStateException("Missing shared VEP flags: ${flagFile}")
+    }
+    def tokens = flagFile.readLines()
+        .collect { it.trim() }
+        .findAll { it && !it.startsWith('#') }
+    if (tokens.isEmpty()) {
+        throw new IllegalStateException("Shared VEP flags file is empty: ${flagFile}")
+    }
+    return tokens.join(' ')
+}
 
 process VEP_ANNOTATION {
     tag "$sample_id"
@@ -39,67 +56,22 @@ process VEP_ANNOTATION {
     path "${sample_id}_${params.variant_caller}_vep_summary.html",             emit: summary
 
     script:
-    // VEP fork count: use all available CPUs
+    // Static flags: modules/vep_annotation.flags (shared with src/annotate_vcf.sh).
+    def vep_flags = vepAnnotationStaticFlags()
     def vep_forks = task.cpus
     """
     export TMPDIR=\$PWD
 
-    # ── VEP annotation ──────────────────────────────────────
-    # --offline        : use local cache (no internet required at runtime)
-    # --cache          : enable cache mode
-    # --dir_cache      : path to pre-downloaded VEP cache
-    # --assembly       : GRCh38 (must match cache version)
-    # --format vcf     : input is VCF
-    # --vcf            : output in VCF format (adds CSQ INFO field)
-    # --compress_output bgzip : bgzip the output for tabix indexing
-    # --hgvs           : add HGVSc and HGVSp
-    # --hgvsg          : add HGVSg (genomic HGVS)
-    # --symbol         : add gene symbol (HGNC)
-    # --mane           : annotate with MANE Select transcript
-    # --canonical      : mark canonical transcripts
-    # --af_gnomad      : add gnomAD exomes + genomes AF
-    # --af_1kg         : add 1000 Genomes AF
-    # --sift b         : add SIFT score and prediction
-    # --polyphen b     : add PolyPhen-2 score and prediction
-    # --check_existing : check against known variants (dbSNP rsID)
-    # --variant_class  : add SO variant class
-    # --numbers        : add exon/intron numbers
-    # --gene_phenotype : add gene-phenotype associations
-    # --pick            : pick one consequence per variant (MANE > canonical > most severe)
-    # --pick_order     : priority for --pick
-    # --fork           : parallel processing
-    vep \
-        --input_file ${vcf} \
-        --output_file ${sample_id}_${params.variant_caller}_annotated.vcf.gz \
-        --stats_file ${sample_id}_${params.variant_caller}_vep_summary.html \
-        --format vcf \
-        --vcf \
-        --compress_output bgzip \
-        --offline \
-        --cache \
-        --dir_cache ${vep_cache_dir} \
-        --assembly GRCh38 \
-        --fasta ${ref_fasta} \
-        --hgvs \
-        --hgvsg \
-        --symbol \
-        --mane \
-        --canonical \
-        --af_gnomad \
-        --af_1kg \
-        --sift b \
-        --polyphen b \
-        --check_existing \
-        --variant_class \
-        --numbers \
-        --gene_phenotype \
-        --pick \
-        --pick_order mane_select,canonical,appris,tsl,biotype,ccds,rank,length \
-        --fork ${vep_forks} \
-        --force_overwrite \
-        --no_progress
+    vep \\
+        --input_file ${vcf} \\
+        --output_file ${sample_id}_${params.variant_caller}_annotated.vcf.gz \\
+        --stats_file ${sample_id}_${params.variant_caller}_vep_summary.html \\
+        ${vep_flags} \\
+        --dir_cache ${vep_cache_dir} \\
+        --assembly GRCh38 \\
+        --fasta ${ref_fasta} \\
+        --fork ${vep_forks}
 
-    # ── Index the output VCF ────────────────────────────────
     tabix -p vcf ${sample_id}_${params.variant_caller}_annotated.vcf.gz
     """
 }
@@ -130,40 +102,20 @@ process VEP_ANNOTATION_DOCKER {
     path "${sample_id}_${params.variant_caller}_vep_summary.html",             emit: summary
 
     script:
+    def vep_flags = vepAnnotationStaticFlags()
     def vep_forks = task.cpus
     """
     export TMPDIR=\$PWD
 
-    vep \
-        --input_file ${vcf} \
-        --output_file ${sample_id}_${params.variant_caller}_annotated.vcf.gz \
-        --stats_file ${sample_id}_${params.variant_caller}_vep_summary.html \
-        --format vcf \
-        --vcf \
-        --compress_output bgzip \
-        --offline \
-        --cache \
-        --dir_cache ${vep_cache_dir} \
-        --assembly GRCh38 \
-        --fasta ${ref_fasta} \
-        --hgvs \
-        --hgvsg \
-        --symbol \
-        --mane \
-        --canonical \
-        --af_gnomad \
-        --af_1kg \
-        --sift b \
-        --polyphen b \
-        --check_existing \
-        --variant_class \
-        --numbers \
-        --gene_phenotype \
-        --pick \
-        --pick_order mane_select,canonical,appris,tsl,biotype,ccds,rank,length \
-        --fork ${vep_forks} \
-        --force_overwrite \
-        --no_progress
+    vep \\
+        --input_file ${vcf} \\
+        --output_file ${sample_id}_${params.variant_caller}_annotated.vcf.gz \\
+        --stats_file ${sample_id}_${params.variant_caller}_vep_summary.html \\
+        ${vep_flags} \\
+        --dir_cache ${vep_cache_dir} \\
+        --assembly GRCh38 \\
+        --fasta ${ref_fasta} \\
+        --fork ${vep_forks}
 
     tabix -p vcf ${sample_id}_${params.variant_caller}_annotated.vcf.gz
     """

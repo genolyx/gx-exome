@@ -1,0 +1,36 @@
+# Shared VEP annotation flags.
+# Read by bin/modules/annotation.nf (VEP_ANNOTATION, VEP_ANNOTATION_DOCKER)
+# and src/annotate_vcf.sh. Do not copy this list into either caller.
+#
+# One argv token per line. Blank lines and lines starting with # are ignored.
+#
+# Both callers append, in this order, after these tokens:
+#   --dir_cache <cache> --assembly <GRCh38|GRCh37> --fasta <fasta> --fork <n>
+# plus the per-run --input_file, --output_file, and --stats_file.
+--format
+vcf
+--vcf
+--compress_output
+bgzip
+--offline
+--cache
+--hgvs
+--hgvsg
+--symbol
+--mane
+--canonical
+--af_gnomad
+--af_1kg
+--sift
+b
+--polyphen
+b
+--check_existing
+--variant_class
+--numbers
+--gene_phenotype
+--pick
+--pick_order
+mane_select,canonical,appris,tsl,biotype,ccds,rank,length
+--force_overwrite
+--no_progress
