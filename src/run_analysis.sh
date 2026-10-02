@@ -29,6 +29,7 @@ Options:
                                BAM must be sorted, duplicate-marked, and indexed (.bam.bai)
                                Saves ~45-60 min alignment time (testing / re-analysis)
     --skip-cnv                 Skip CNV analysis (single sample 시 필요, cohort mode는 2+ 샘플 필요)
+    --vcf-only                 Align, variant-call, and VEP only (skip QC, SV, dark gene, PGx, IGV, summary)
     --aligner ALIGNER          Aligner to use: bwa-mem or bwa-mem2 (default)
     --variant-caller CALLER    Variant caller: gatk, deepvariant (default), or strelka2
     --skip-vep                 Skip VEP annotation (use legacy snpEff mode)
@@ -48,6 +49,8 @@ Options:
                                Built-in: twist-exome2
                                Custom:   <data-dir>/data/bed/<PANEL>/targets.bed{,.gz,.gz.tbi}
     --backbone-bed PATH        Direct BED path (overrides --panel; .gz/.gz.tbi auto-derived)
+                               Calling target (primary / targets.bed). Not the probe footprint.
+    --capture-bed PATH         Optional probe-footprint BED. QC coverage only; not used for calling.
     --list-panels              List available panels and exit
     -h, --help                 Show this help message
 
@@ -88,6 +91,7 @@ DATA_DIR="$(pwd)/data"
 REF_DIR="$(pwd)/refs"
 CLEANUP=""
 SKIP_CNV=""
+VCF_ONLY=""
 ALIGNER="bwa-mem2"
 VARIANT_CALLER="deepvariant"
 SKIP_VEP="true"
@@ -100,6 +104,7 @@ PANEL="twist-exome2"
 BACKBONE_BED=""
 BACKBONE_BED_GZ=""
 BACKBONE_BED_TBI=""
+CAPTURE_BED=""
 LIST_PANELS=""
 # SSD scratch acceleration
 INPUT_BAM=""
@@ -140,6 +145,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-cnv)
             SKIP_CNV="--skip_cnv"
+            shift
+            ;;
+        --vcf-only)
+            VCF_ONLY="--vcf_only true"
             shift
             ;;
         --aligner)
@@ -197,6 +206,11 @@ while [[ $# -gt 0 ]]; do
         --backbone-bed)
             require_arg "$1" "${2:-}"
             BACKBONE_BED="$2"
+            shift 2
+            ;;
+        --capture-bed)
+            require_arg "$1" "${2:-}"
+            CAPTURE_BED="$2"
             shift 2
             ;;
         --list-panels)
@@ -452,6 +466,7 @@ echo "  Data Directory: ${DATA_DIR}"
 echo "  Reference Directory: ${REF_DIR}"
 echo "  Cleanup: ${CLEANUP:-disabled}"
 echo "  Skip CNV: $([ -n "$SKIP_CNV" ] && echo "enabled" || echo "disabled")"
+echo "  VCF only: $([ -n "$VCF_ONLY" ] && echo "enabled (align + call + VEP)" || echo "disabled")"
 echo "  Aligner: ${ALIGNER}"
 echo "  Variant Caller: ${VARIANT_CALLER}"
 echo "  VEP Annotation: $([ "$SKIP_VEP" = "true" ] && echo "disabled (snpEff)" || echo "enabled")"
@@ -571,6 +586,34 @@ if [ -n "$INPUT_BAM" ]; then
     INPUT_BAM_NF_PARAM="--input_bam ${INPUT_BAM}"
 fi
 
+# Primary / capture BED parents outside DATA_DIR must be visible to the Nextflow container.
+declare -A _EXTRA_MOUNT_SEEN=()
+BED_MOUNT_ARGS=()
+add_ro_mount_parent() {
+    local path="$1"
+    [ -n "$path" ] || return 0
+    local dir
+    dir="$(dirname -- "$path")"
+    case "$path" in
+        "${DATA_DIR}/"*) return 0 ;;
+    esac
+    [ -n "${_EXTRA_MOUNT_SEEN[$dir]:-}" ] && return 0
+    _EXTRA_MOUNT_SEEN[$dir]=1
+    BED_MOUNT_ARGS+=(-v "${dir}:${dir}:ro")
+}
+add_ro_mount_parent "$BACKBONE_BED"
+add_ro_mount_parent "$CAPTURE_BED"
+
+CAPTURE_NF_PARAM=""
+if [ -n "$CAPTURE_BED" ]; then
+    if [ ! -f "$CAPTURE_BED" ]; then
+        echo -e "${RED}Error: Capture BED not found: ${CAPTURE_BED}${NC}"
+        exit 1
+    fi
+    echo "  Capture BED (QC only): ${CAPTURE_BED}"
+    CAPTURE_NF_PARAM="--capture_bed ${CAPTURE_BED}"
+fi
+
 # Docker binary path on the host — bind-mounted into the container so
 # Nextflow (docker.enabled=true) can spawn task containers via the host daemon.
 DOCKER_BIN="$(which docker)"
@@ -601,6 +644,7 @@ docker run --rm -t --name "$NF_DOCKER_NAME" \
     -v "${DATA_DIR}/bin:/app/bin:ro" \
     -v "${DATA_DIR}/fastq:${DATA_DIR}/fastq:ro" \
     ${INPUT_BAM_MOUNT_ARGS} \
+    "${BED_MOUNT_ARGS[@]}" \
     -v "${DATA_DIR}/analysis:${DATA_DIR}/analysis" \
     -v "${DATA_DIR}/output:${DATA_DIR}/output" \
     -v "${DATA_DIR}/log:${DATA_DIR}/log" \
@@ -632,6 +676,7 @@ docker run --rm -t --name "$NF_DOCKER_NAME" \
             --backbone_bed ${BACKBONE_BED} \
             --backbone_bed_gz ${BACKBONE_BED_GZ} \
             --backbone_bed_tbi ${BACKBONE_BED_TBI} \
+            ${CAPTURE_NF_PARAM} \
             --vep_cache_dir ${DATA_DIR}/data/refs/vep_cache \
             --dark_genes_plus_bed ${DATA_DIR}/data/bed/dark_genes_plus.bed \
             --hba_bed ${DATA_DIR}/data/bed/hba_targets.bed \
@@ -644,6 +689,7 @@ docker run --rm -t --name "$NF_DOCKER_NAME" \
             --proactive_health_test ${PROACTIVE_HEALTH} \
             --include_apoe ${INCLUDE_APOE} \
             ${SKIP_CNV} \
+            ${VCF_ONLY} \
             ${SSD_NF_PARAMS} \
             --outdir ${DATA_DIR}/analysis/${WORK_DIR}/${SAMPLE_NAME} \
             --output_dir ${DATA_DIR}/output/${WORK_DIR}/${SAMPLE_NAME} \

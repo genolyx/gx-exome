@@ -346,3 +346,57 @@ MGC_B64
     fi
     """
 }
+
+// Probe-footprint coverage. Published under qc/ only.
+// Not an input to DeepVariant, CNV, DEPTH_ANALYSIS, or gene filtering.
+process CAPTURE_BED_QC {
+    tag "$sample_id"
+    label 'paraphase'
+    publishDir "${params.outdir}/qc", mode: 'copy'
+
+    input:
+    tuple val(sample_id), path(bam), path(bai)
+    path capture_bed
+
+    output:
+    path "${sample_id}.capture_bed.mosdepth.summary.txt", emit: summary
+    path "${sample_id}_capture_bed_qc.txt", emit: qc_txt
+
+    script:
+    """
+    export TMPDIR=\$PWD
+    export HOME=\$PWD
+
+    if ! command -v mosdepth >/dev/null 2>&1; then
+        export PIP_CACHE_DIR=\$PWD/.cache/pip
+        export XDG_CACHE_HOME=\$PWD/.cache/xdg
+        export PATH=\$PWD:\$PATH
+        export CONDA_PKGS_DIRS=\$PWD/.cache/micromamba_pkgs
+        export MAMBA_ROOT_PREFIX=\$PWD/micromamba
+        mkdir -p \$CONDA_PKGS_DIRS \$MAMBA_ROOT_PREFIX \$PIP_CACHE_DIR \$XDG_CACHE_HOME
+        wget -q --no-check-certificate https://curl.se/ca/cacert.pem
+        export SSL_CERT_FILE=\$PWD/cacert.pem
+        export MAMBA_SSL_VERIFY=false
+        if [ ! -f "micromamba_bin" ]; then
+            wget -qO micromamba_bin https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-linux-64 \
+                && chmod +x micromamba_bin
+        fi
+        if [ -f micromamba_bin ] && [ ! -x ./env/bin/mosdepth ]; then
+            ./micromamba_bin create -r \$MAMBA_ROOT_PREFIX -p ./env -c bioconda -c conda-forge mosdepth=0.3.3 -y
+        fi
+        [ -x ./env/bin/mosdepth ] || { echo "ERROR: mosdepth env missing"; exit 1; }
+        export PATH=\$PWD/env/bin:\$PATH
+    fi
+
+    MD=\$(command -v mosdepth)
+    \$MD -t ${task.cpus} -n --by ${capture_bed} ${sample_id}.capture_bed ${bam}
+    awk 'BEGIN { mean="NA"; bases="NA" }
+         \$1 == "total" { bases=\$3; mean=\$4 }
+         END {
+           print "capture_bed_qc_only\\tyes"
+           print "used_for_variant_calling\\tno"
+           print "bases\\t" bases
+           print "mean_depth\\t" mean
+         }' ${sample_id}.capture_bed.mosdepth.summary.txt > ${sample_id}_capture_bed_qc.txt
+    """
+}

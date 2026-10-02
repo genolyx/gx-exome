@@ -6,6 +6,8 @@ params.output_dir = null
 params.sample_name = null
 // BAM input mode: skip FASTQ → alignment → markdup (pre-aligned BAM)
 params.input_bam = null
+// Optional probe-footprint BED. QC metrics only; calling stays on backbone_bed.
+params.capture_bed = null
 params.skip_vep = false
 params.vep_cache_dir = "${projectDir}/../data/refs/vep_cache"
 // Defaults also here so behavior is defined even if nextflow.config is not picked up
@@ -17,6 +19,8 @@ params.skip_apoe = false
 // Proactive health test: APOE (AD risk context) is opt-in via include_apoe; default off for that mode
 params.proactive_health_test = false
 params.include_apoe = false
+// Align, call, and VEP only. Skips QC, SV, CNV, dark gene, PGx, IGV, and summary.
+params.vcf_only = false
 params.pgx_reference_genome = 'GRCh38'
 params.pgx_container = 'pgkb/pharmcat:3.2.0'
 
@@ -51,7 +55,7 @@ include { PARAPHASE_RUN; SMN_UNIFIED_C840_BAM; SMACA_RUN; PARAPHASE_RESCUE } fro
 include { GENERATE_SUMMARY_REPORT } from './modules/summary'
 include { EXPANSION_HUNTER }        from './modules/repeat'
 include { MANTA_SV }                from './modules/sv'
-include { DEPTH_ANALYSIS; MOSDEPTH_PER_BASE_QC } from './modules/coverage'
+include { DEPTH_ANALYSIS; MOSDEPTH_PER_BASE_QC; CAPTURE_BED_QC } from './modules/coverage'
 include { FALLBACK_ANALYSIS }       from './modules/fallback'
 include { HBA_PARALOG_PILEUP }      from './modules/hba_paralog'
 include { CYP21_PARALOG_PILEUP }    from './modules/cyp21_paralog'
@@ -63,6 +67,18 @@ include { RUN_ALDY_CYP2D6 }                     from './modules/aldy'
 include { RUN_PGX_CUSTOM }                       from './modules/pgx_custom'
 include { GENERATE_PGX_PANEL_REPORT }             from './modules/pgx_report'
 include { RUN_APOE }                              from './modules/apoe'
+
+// True when dir contains at least one regular file whose name matches namePat.
+// Top-level function: Nextflow 26 does not treat a workflow-local closure as callable.
+def dirHasFilesMatching(dir, namePat) {
+    try {
+        def d = new File(dir)
+        if (!d.isDirectory()) return false
+        return d.listFiles()?.any { f -> f.isFile() && (f.getName() ==~ namePat) }
+    } catch (Throwable ignored) {
+        return false
+    }
+}
 
 // -------------------------------------------------------
 // Workflow
@@ -84,17 +100,27 @@ workflow {
         error "Invalid variant_caller '${params.variant_caller}'. Choose one of: ${validCallers.join(', ')}"
     }
 
-    def mosdepthPerBaseOn = !java.lang.Boolean.parseBoolean(
+    def vcfOnly = java.lang.Boolean.parseBoolean(
+        params.vcf_only != null ? params.vcf_only.toString() : 'false'
+    )
+    def mosdepthPerBaseOn = !vcfOnly && !java.lang.Boolean.parseBoolean(
         params.skip_mosdepth_per_base != null ? params.skip_mosdepth_per_base.toString() : 'false'
     )
     def useSsd = java.lang.Boolean.parseBoolean(
         params.use_ssd != null ? params.use_ssd.toString() : 'false'
     )
+    // Nextflow 26 leaves --flag false as the string "false", which is truthy.
+    def skipVep = java.lang.Boolean.parseBoolean(
+        params.skip_vep != null ? params.skip_vep.toString() : 'false'
+    )
+    def skipCnv = vcfOnly || java.lang.Boolean.parseBoolean(
+        params.skip_cnv != null ? params.skip_cnv.toString() : 'false'
+    )
     println "=" * 60
     println "GX-Exome Pipeline"
     println "  Aligner        : ${params.aligner}"
     println "  Variant Caller : ${params.variant_caller}"
-    println "  VEP Annotation : ${params.skip_vep ? 'SKIPPED' : 'ENABLED'}"
+    println "  VEP Annotation : ${skipVep ? 'SKIPPED' : 'ENABLED'}"
     println "  MOSDEPTH per-base (qc/, daemon gene coverage): ${mosdepthPerBaseOn ? 'ENABLED' : 'SKIPPED (skip_mosdepth_per_base)'}"
     println "  SSD Scratch    : ${useSsd ? 'ENABLED  scratch=' + params.scratch_dir + '  cleanup=true' : 'DISABLED (HDD workDir)'}"
     def skipPgx = java.lang.Boolean.parseBoolean(
@@ -118,8 +144,9 @@ workflow {
             : proactiveHealth && !includeApoe
                 ? 'SKIPPED (proactive health; opt-in with --include_apoe)'
                 : 'ENABLED'
-    println "  PGx (PharmCAT → pgx/): ${skipPgx ? 'SKIPPED (skip_pgx)' : 'ENABLED (default)'}"
-    println "  APOE (ε2/ε3/ε4 → apoe/): ${apoeBanner}"
+    println "  PGx (PharmCAT → pgx/): ${vcfOnly ? 'SKIPPED (vcf_only)' : (skipPgx ? 'SKIPPED (skip_pgx)' : 'ENABLED (default)')}"
+    println "  APOE (ε2/ε3/ε4 → apoe/): ${vcfOnly ? 'SKIPPED (vcf_only)' : apoeBanner}"
+    println "  Secondary tracks : ${vcfOnly ? 'SKIPPED (vcf_only: QC/SV/dark gene/PGx/IGV/summary)' : 'ENABLED'}"
     println "=" * 60
 
     ref_fasta = file(params.ref_fasta)
@@ -128,7 +155,9 @@ workflow {
     // -------------------------------------------------------
     // 0. Prepare Shared Visualization Resources
     // -------------------------------------------------------
-    PREPARE_VIZ_RESOURCES(ref_fasta, ref_fai)
+    if (!vcfOnly) {
+        PREPARE_VIZ_RESOURCES(ref_fasta, ref_fai)
+    }
 
     if (params.input_bam) {
         // -------------------------------------------------------
@@ -154,25 +183,29 @@ workflow {
         // -------------------------------------------------------
         // FASTQ pairs: explicit R1→R2 pairing. Nextflow's fromFilePairs(*_R{1,2}_*) has proven unreliable
         // for some Illumina names (channel stays empty; only PREPARE_VIZ_RESOURCES runs → false SUCCESS).
-        // We discover *_R1_* files synchronously, fail fast if none or R2 missing, then emit [sample_id,[R1,R2]].
+        // Accept both SAMPLE_R1_001.fastq.gz and SAMPLE_R1.fq.gz.
         def fqDir = new File(params.fastq_dir as String)
         if (!fqDir.isDirectory()) {
             error "FASTQ directory does not exist or is not a directory: ${params.fastq_dir}"
         }
         def r1Files = fqDir.listFiles()?.findAll { f ->
-            f.file && f.name.contains('_R1_') && (f.name.endsWith('.fq.gz') || f.name.endsWith('.fastq.gz'))
+            def n = f.name
+            def gz = n.endsWith('.fq.gz') || n.endsWith('.fastq.gz')
+            f.file && gz && (n.contains('_R1_') || n.contains('_R1.'))
         }?.sort { a, b -> a.name <=> b.name }
         if (!r1Files) {
-            error "No *_R1_*.{fastq|fq}.gz files under ${params.fastq_dir}. Pair each R1 with an R2 file (same name with _R2_ in place of _R1_)."
+            error "No *_R1*.{fastq|fq}.gz files under ${params.fastq_dir}. Pair each R1 with an R2 file (_R2_ or _R2.)."
         }
         println "FASTQ: ${r1Files.size()} R1 file(s) → pairing with matching _R2_ reads"
         Channel
             .fromList(r1Files.collect { it.toString() })
             .map { String r1path ->
                 def r1 = file(r1path)
-                def r2path = r1path.replace('_R1_', '_R2_')
+                def r2path = r1path.contains('_R1_') ? r1path.replace('_R1_', '_R2_') : r1path.replace('_R1.', '_R2.')
                 def r2 = file(r2path, checkIfExists: true)
-                def sid = r1.name.replaceAll(/_R1_.*/, '')
+                def sid = r1.name.contains('_R1_')
+                    ? r1.name.replaceAll(/_R1_.*/, '')
+                    : r1.name.replaceAll(/_R1\.(fastq|fq)\.gz$/, '')
                 tuple(sid, [r1, r2])
             }
             .set { fastq_ch }
@@ -199,16 +232,6 @@ workflow {
         // -------------------------------------------------------
         // If params.ref_bwa*_indices points at a missing or empty dir, Channel.fromPath().collect()
         // yields an empty list — ALIGN never schedules tasks but PREPARE_VIZ_RESOURCES still runs → false SUCCESS.
-        def dirHasFilesMatching = { String dir, java.util.regex.Pattern namePat ->
-            try {
-                def d = new File(dir)
-                if (!d.isDirectory()) return false
-                return d.listFiles()?.any { f -> f.isFile() && (f.getName() ==~ namePat) }
-            } catch (Throwable t) {
-                return false
-            }
-        }
-
         if (params.aligner == 'bwa-mem2') {
             def usePrebuiltMem2 = false
             if (params.ref_bwa_mem2_indices) {
@@ -290,7 +313,7 @@ workflow {
     // -------------------------------------------------------
     interval_list_ch = Channel.empty()
 
-    if (!params.skip_cnv) {
+    if (!skipCnv) {
         if (params.interval_list) {
             interval_list_ch = Channel.value(file(params.interval_list))
         } else if (params.backbone_bed) {
@@ -303,7 +326,7 @@ workflow {
         }
     }
 
-    if (!params.skip_cnv && (params.backbone_bed || params.interval_list)) {
+    if (!skipCnv && (params.backbone_bed || params.interval_list)) {
         if (params.pon_tar) {
             GCNV_CLARITY(COLLECT_READ_COUNTS.out.counts_hdf5, file(params.pon_tar), interval_list_ch)
         } else {
@@ -370,6 +393,7 @@ workflow {
         }
     }
 
+    if (!vcfOnly) {
     MANTA_SV(bam_ch, ref_fasta, ref_fai)
 
     // 2b. Target Coverage & Intron Verification
@@ -378,6 +402,11 @@ workflow {
         dark_genes_plus = file(params.dark_genes_plus_bed)
         DEPTH_ANALYSIS(bam_ch, file(params.backbone_bed), dark_genes_plus)
         intron_report_ch = DEPTH_ANALYSIS.out.intron_report.collect()
+    }
+
+    // Probe footprint coverage. Does not feed calling, CNV, or panel filter.
+    if (params.capture_bed) {
+        CAPTURE_BED_QC(bam_ch, file(params.capture_bed))
     }
 
     // 2c. Fallback Analysis (HBA / CYP21A2)
@@ -436,6 +465,7 @@ workflow {
     // 4. Track 3: Repeat Expansion
     // -------------------------------------------------------
     EXPANSION_HUNTER(bam_ch, ref_fasta, ref_fai, file(params.eh_catalog ?: params.ref_fasta))
+    }
 
     // -------------------------------------------------------
     // 5. Track 4: Variant Calling — selectable via params.variant_caller
@@ -488,7 +518,7 @@ workflow {
     // -------------------------------------------------------
     annotated_vcf_ch = Channel.empty()
 
-    if (!params.skip_vep && params.backbone_bed) {
+    if (!skipVep && params.backbone_bed) {
         vep_cache = file(params.vep_cache_dir)
         VEP_ANNOTATION(vcf_ch, vep_cache, ref_fasta, ref_fai)
         annotated_vcf_ch = VEP_ANNOTATION.out.vcf
@@ -498,6 +528,8 @@ workflow {
         annotated_vcf_ch = vcf_ch
     }
 
+    // vcf_only stops after the annotated VCF. PGx, IGV, and summary are not needed.
+    if (!vcfOnly) {
     // Fan-out: PGx (unless skip_pgx), optional APOE, IGV snapshots, and summary each need a copy of the annotated/filtered VCF channel.
     // APOE branch only when runApoe (proactive health requires --include_apoe).
     // Nextflow 25+ removed Channel.into — use multiMap (operator reference).
@@ -614,7 +646,7 @@ workflow {
     // Final Consolidation
     // -------------------------------------------------------
     manta_vcf_ch = MANTA_SV.out.vcf.map { it[1] }.collect()
-    gcnv_vcf_ch  = params.skip_cnv ? Channel.value([]) : POSTPROCESS_GCNV.out.vcf.map { it[1] }.collect()
+    gcnv_vcf_ch  = skipCnv ? Channel.value([]) : POSTPROCESS_GCNV.out.vcf.map { it[1] }.collect()
 
     // Per-sample annotated (VEP) or filtered VCFs + tabix index — pysam.fetch() in summary requires .tbi staged beside .vcf.gz
     annotated_vcf_for_summary = params.backbone_bed ? anno_sum_ch.flatMap { [it[1], it[2]] }.collect() : Channel.value([])
@@ -643,12 +675,11 @@ workflow {
         apoe_json_for_summary,
         apoe_review_for_summary
     )
-}
+    }
 
-// -------------------------------------------------------
-// Completion handler
-// -------------------------------------------------------
-workflow.onComplete {
+    // Completion handler must live in the entry workflow.
+    // Nextflow 26 rejects a top-level workflow.onComplete next to includes.
+    workflow.onComplete = {
     def workDir = workflow.workDir
     def runName = workflow.runName
 
@@ -660,7 +691,7 @@ workflow.onComplete {
     println "Duration       : ${workflow.duration}"
     println "Aligner        : ${params.aligner}"
     println "Variant Caller : ${params.variant_caller}"
-    println "VEP Annotation : ${params.skip_vep ? 'SKIPPED' : 'ENABLED'}"
+    println "VEP Annotation : ${skipVep ? 'SKIPPED' : 'ENABLED'}"
     println "Work Dir       : ${workDir}"
     println "Analysis Dir   : ${params.outdir}"
     if (params.output_dir) {
@@ -765,7 +796,8 @@ workflow.onComplete {
                 "sample_name": "${params.sample_name ?: 'unknown'}",
                 "aligner": "${params.aligner}",
                 "variant_caller": "${params.variant_caller}",
-                "vep_annotation": "${params.skip_vep ? 'skipped' : 'enabled'}",
+                "vep_annotation": "${skipVep ? 'skipped' : 'enabled'}",
+                "vcf_only": "${vcfOnly ? 'true' : 'false'}",
                 "completed_at": "\$(date -Iseconds)",
                 "output_dir": "${params.output_dir}",
                 "analysis_dir": "${params.outdir}"
@@ -832,4 +864,5 @@ MARKER
     }
     println "=" * 60
     println ""
+    }
 }

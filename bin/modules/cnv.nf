@@ -332,7 +332,7 @@ with open('${interval_list}', 'r') as f_in, open('contig_ploidy_priors.tsv', 'w'
 process GCNV_CASE_RUN {
     tag "$sample_id"
     label 'gatk'
-    publishDir "${params.outdir}/cnv/case/${sample_id}", mode: 'copy'
+    publishDir { "${params.outdir}/cnv/case/${sample_id}" }, mode: 'copy'
 
     input:
     tuple val(sample_id), path(counts_hdf5)
